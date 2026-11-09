@@ -160,6 +160,9 @@ body.simple .wrap{padding-top:4px}
       <label>Durée maximale d'une tournée (heures)
         <input id="p-maxh" type="number" min="2" max="14" step="0.5" value="8">
       </label>
+      <label>Dépassement toléré (minutes)
+        <input id="p-tol" type="number" min="0" max="120" step="5" value="30">
+      </label>
       <label>Arrêts maximum par tournée
         <input id="p-maxstops" type="number" min="1" max="40" value="12">
       </label>
@@ -200,6 +203,7 @@ body.simple .wrap{padding-top:4px}
       <li>La colonne « Vers » est interprétée ainsi : « Client » pour une livraison, « Bruxelles » pour une reprise vers le dépôt. Le sens se corrige ligne par ligne.</li>
       <li>Le départ et le retour se font au dépôt, Rue Lieutenant Lotin 40, 1190 Forest.</li>
       <li>Les capacités 5, 6 et 8 mètres viennent de l'entretien du 9 novembre. Une commande qui dépasse le plus grand véhicule est signalée « Plusieurs camions », comme dans le logiciel actuel.</li>
+      <li>Un véhicule rentré au dépôt peut repartir pour une seconde tournée après 30 minutes de rechargement. Une tournée ne fait pas attendre le chauffeur plus d'une heure au total.</li>
       <li>Les adresses sont placées au centre de leur commune. La version suivante utilisera l'adresse exacte et les temps de route réels.</li>
     </ul>
   </div>
@@ -245,7 +249,7 @@ function readParams(){
   P.caps = $("p-veh").value.split(/[;, ]+/).map(s=>parseFloat(s.replace(",", "."))).filter(v=>v>0).sort((a,b)=>a-b);
   if(!P.caps.length) P.caps=[8];
   P.maxH = +$("p-maxh").value||8; P.maxStops = +$("p-maxstops").value||12;
-  P.stop = +$("p-stop").value||0; P.speed = +$("p-speed").value||50; P.strict = $("p-strict").checked;
+  P.stop = +$("p-stop").value||0; P.tol = Math.max(0,+$("p-tol").value||0); P.speed = +$("p-speed").value||50; P.strict = $("p-strict").checked;
   const d = $("p-depot").value.split(/[;, ]+/).map(Number);
   P.depot = (d.length>=2 && isFinite(d[0]) && isFinite(d[1]) && d[0]) ? {lat:d[0],lon:d[1]} : {lat:50.803,lon:4.310};
 }
@@ -259,43 +263,53 @@ function km(a,b){
   const h=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;
   return 2*R*Math.asin(Math.sqrt(h))*1.3;
 }
-function mkRow(a){ return {id:uid++,client:a[0]||"",lieu:a[1]||"",ville:a[2]||"",cp:String(a[3]||""),m:+a[4]||0,type:a[5]==="L"?"L":"R",deb:a[6]||"",fin:a[7]||"",cur:a[8]||"",lat:a[9]??null,lon:a[10]??null,unsure:!!a[11]}; }
+function mkRow(a){ return {id:uid++,client:a[0]||"",lieu:a[1]||"",ville:a[2]||"",cp:String(a[3]||""),m:+a[4]||0,type:a[5]==="L"?"L":"R",deb:a[6]||"",fin:a[7]||"",cur:a[8]||"",lat:a[9]??null,lon:a[10]??null,unsure:!!a[11],doc:String(a[12]||"")}; }
 
 function buildStops(list, keepOrder){
+  // Un arrêt = un lieu. Les commandes d'un même lieu dont les créneaux se recouvrent d'au moins 1 h sont servies en un passage ; sinon le lieu donne plusieurs passages.
   const map=new Map();
   for(const r of list){
     if(r.lat==null||r.lon==null) continue;
-    const d=toMin(r.deb), slot=(d!=null&&d>=15*60)?"soir":"jour";
-    const key=[r.cp,(r.lieu||r.client).toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,12),slot,keepOrder?r.cur:""].join("|");
-    if(!map.has(key)) map.set(key,{id:key,rows:[],slot});
-    map.get(key).rows.push(r);
+    const key=[r.cp,(r.lieu||r.client).toLowerCase().normalize("NFD").replace(/[^a-z0-9]/g,"").slice(0,10),keepOrder?r.cur:""].join("|");
+    if(!map.has(key)) map.set(key,[]);
+    map.get(key).push(r);
   }
-  return [...map.values()].map(s=>{
-    const n=s.rows.length;
-    s.lat=s.rows.reduce((t,r)=>t+r.lat,0)/n; s.lon=s.rows.reduce((t,r)=>t+r.lon,0)/n;
-    s.L=s.rows.filter(r=>r.type==="L").reduce((t,r)=>t+r.m,0);
-    s.R=s.rows.filter(r=>r.type==="R").reduce((t,r)=>t+r.m,0);
-    const ds=s.rows.map(r=>toMin(r.deb)).filter(v=>v!=null), fs=s.rows.map(r=>toMin(r.fin)).filter(v=>v!=null);
-    s.a=ds.length?Math.max(...ds):null; s.b=fs.length?Math.min(...fs):null;
-    if(s.a!=null&&s.b!=null&&s.a>s.b){ s.a=Math.min(...ds); s.b=Math.max(...fs); }
-    s.name=s.rows[0].lieu||s.rows[0].client; s.ville=s.rows[0].ville; s.cp=s.rows[0].cp;
-    s.clients=[...new Set(s.rows.map(r=>r.client))].join(", ");
-    return s;
-  });
+  const out=[];
+  for(const [key,rs] of map){
+    const win=r=>[toMin(r.deb),toMin(r.fin)];
+    const sorted=keepOrder?rs:rs.slice().sort((x,y)=>(win(x)[0]??0)-(win(y)[0]??0));
+    const groups=[];
+    for(const r of sorted){
+      const [ra,rb]=win(r), g=groups[groups.length-1];
+      if(g&&Math.min(g.B,rb??1440)-Math.max(g.A,ra??0)>=60){ g.rows.push(r); g.A=Math.max(g.A,ra??0); g.B=Math.min(g.B,rb??1440); if(ra!=null) g.hasA=true; if(rb!=null) g.hasB=true; }
+      else groups.push({rows:[r],A:ra??0,B:rb??1440,hasA:ra!=null,hasB:rb!=null});
+    }
+    groups.forEach((g,k)=>{
+      const n=g.rows.length, s={id:key+"#"+k,rows:g.rows};
+      s.lat=g.rows.reduce((t,r)=>t+r.lat,0)/n; s.lon=g.rows.reduce((t,r)=>t+r.lon,0)/n;
+      s.L=g.rows.filter(r=>r.type==="L").reduce((t,r)=>t+r.m,0);
+      s.R=g.rows.filter(r=>r.type==="R").reduce((t,r)=>t+r.m,0);
+      s.a=g.hasA?g.A:null; s.b=g.hasB?g.B:null;
+      s.name=g.rows[0].lieu||g.rows[0].client; s.ville=g.rows[0].ville; s.cp=g.rows[0].cp;
+      s.clients=[...new Set(g.rows.map(r=>r.client))].join(", ");
+      out.push(s);
+    });
+  }
+  return out;
 }
 function evaluate(seq){
-  const D=P.depot; let load=seq.reduce((t,s)=>t+s.L,0), start=load, peak=load, dist=0, late=0, prev=D;
+  const D=P.depot; let load=seq.reduce((t,s)=>t+s.L,0), start=load, peak=load, dist=0, late=0, wait=0, prev=D;
   const tr0=km(D,seq[0])/P.speed*60, t0=(seq[0].a!=null?seq[0].a:7*60+30)-tr0; let t=t0; const etas=[];
   for(const s of seq){
     const k=km(prev,s); dist+=k; t+=k/P.speed*60;
-    if(s.a!=null&&t<s.a) t=s.a;
+    if(s.a!=null&&t<s.a-0.01){ wait+=s.a-t; t=s.a; }
     const isLate=s.b!=null&&t>s.b+1; if(isLate) late++;
     etas.push({t,late:isLate});
     t+=P.stop+5*(s.rows.length-1);
     load=load-s.L+s.R; if(load>peak) peak=load; prev=s;
   }
   const kb=km(prev,D); dist+=kb; t+=kb/P.speed*60;
-  return {km:dist,min:t-t0,t0,end:t,etas,late,peak,start};
+  return {km:dist,min:t-t0,t0,end:t,etas,late,peak,start,wait};
 }
 const memo=new Map();
 function score(seq){ const e=evaluate(seq); return e.late*1e6+e.min; }
@@ -309,7 +323,7 @@ function improve(seq){
 }
 function orderTour(list){
   if(list.length<2) return list.slice();
-  const key=list.map(s=>s.id).sort().join("#"); if(memo.has(key)) return memo.get(key);
+  const key=list.map(s=>s.id).sort().join("§"); if(memo.has(key)) return memo.get(key);
   let left=list.slice(), seq=[], cur=P.depot;
   while(left.length){ let bi=0,bd=1e9; left.forEach((s,i)=>{const d=km(cur,s); if(d<bd){bd=d;bi=i;}}); cur=left[bi]; seq.push(cur); left.splice(bi,1); }
   const len=q=>{let d=km(P.depot,q[0]); for(let i=1;i<q.length;i++) d+=km(q[i-1],q[i]); return d+km(q[q.length-1],P.depot);};
@@ -320,83 +334,120 @@ function orderTour(list){
       if(len(c)<len(seq)-0.01){ seq=c; improved=true; }
     }
   }
-  // Trois ordres candidats : le plus court, son inverse, et par échéance de créneau. On garde celui qui respecte le mieux les créneaux.
-  const cands=[seq, seq.slice().reverse(), list.slice().sort((a,b)=>(a.b==null?1e9:a.b)-(b.b==null?1e9:b.b))];
+  // Ordres candidats : le plus court, son inverse, par échéance et par ouverture de créneau. On garde celui qui respecte le mieux les créneaux, puis le plus rapide.
+  const cands=[seq, seq.slice().reverse(), list.slice().sort((a,b)=>(a.b==null?1e9:a.b)-(b.b==null?1e9:b.b)), list.slice().sort((a,b)=>(a.a==null?0:a.a)-(b.a==null?0:b.a))];
   let best=cands[0], bs=score(best);
   for(const c of cands.slice(1)){ const v=score(c); if(v<bs-1){ bs=v; best=c; } }
-  if(bs>=1e6){ for(const c of cands){ const k=improve(c), v=score(k); if(v<bs-0.5){ bs=v; best=k; } } }
+  if(bs>=1e6||evaluate(best).wait>1){ for(const c of cands){ const k=improve(c), v=score(k); if(v<bs-0.5){ bs=v; best=k; } } }
   memo.set(key,best); return best;
 }
+const MAX_WAIT=60, RELOAD=30;   // attente maximale tolérée dans une tournée, et temps de rechargement entre deux tournées d'un même véhicule (minutes)
 function feasible(list){
   if(list.length===1) return true;
   if(list.length>P.maxStops) return false;
   const e=evaluate(orderTour(list)), cap=P.caps[P.caps.length-1];
-  return e.peak<=cap+1e-6 && e.min<=P.maxH*60 && (!P.strict||e.late===0);
+  return e.peak<=cap+1e-6 && e.min<=P.maxH*60+P.tol && e.wait<=MAX_WAIT && (!P.strict||e.late===0);
 }
 function plan(){
   memo.clear();
   const all=buildStops(rows,false); stopsById={}; all.forEach(s=>stopsById[s.id]=s);
   unlocated=rows.filter(r=>r.lat==null||r.lon==null).length;
-  const cost=c=>evaluate(orderTour(c)).km, out=[];
-  for(const slot of ["jour","soir"]){
-    // Méthode des économies : on fusionne en priorité les deux groupes dont la réunion épargne le plus de kilomètres, tant que la tournée reste faisable.
-    let cl=all.filter(s=>s.slot===slot).map(s=>[s]);
-    for(;;){
-      let bi=-1,bj=-1,bs=0.5;
-      for(let i=0;i<cl.length;i++) for(let j=i+1;j<cl.length;j++){
-        if(P.mode==="cp"&&cl[i][0].cp.slice(0,2)!==cl[j][0].cp.slice(0,2)) continue;
-        const m=cl[i].concat(cl[j]); if(!feasible(m)) continue;
-        const sv=cost(cl[i])+cost(cl[j])-cost(m); if(sv>bs){ bs=sv; bi=i; bj=j; }
-      }
-      if(bi<0) break;
-      cl[bi]=cl[bi].concat(cl[bj]); cl.splice(bj,1);
+  const cost=c=>c.length?evaluate(orderTour(c)).km:0;
+  const same=(x,y)=>P.mode!=="cp"||x[0].cp.slice(0,2)===y[0].cp.slice(0,2);
+  // 1. Méthode des économies : on réunit en priorité les deux groupes dont la fusion épargne le plus de kilomètres, tant que la tournée reste faisable.
+  let cl=all.map(s=>[s]);
+  for(;;){
+    let bi=-1,bj=-1,bs=0.5;
+    for(let i=0;i<cl.length;i++) for(let j=i+1;j<cl.length;j++){
+      if(!same(cl[i],cl[j])) continue;
+      const m=cl[i].concat(cl[j]); if(!feasible(m)) continue;
+      const sv=cost(cl[i])+cost(cl[j])-cost(m); if(sv>bs){ bs=sv; bi=i; bj=j; }
     }
-    cl.map(c=>({c,t:evaluate(orderTour(c)).t0})).sort((a,b)=>a.t-b.t).forEach(x=>out.push({slot,ids:x.c.map(s=>s.id)}));
+    if(bi<0) break;
+    cl[bi]=cl[bi].concat(cl[bj]); cl.splice(bj,1);
   }
-  tours=out;
+  // 2. Amélioration : on déplace un arrêt vers une autre tournée chaque fois que cela raccourcit le total.
+  for(let it=0;it<60;it++){
+    let best=null, bd=-1;
+    for(let i=0;i<cl.length;i++) for(const s of cl[i]) for(let j=0;j<cl.length;j++){
+      if(i===j||!same([s],cl[j])) continue;
+      const na=cl[i].filter(x=>x!==s), nb=cl[j].concat([s]);
+      if(!feasible(nb)||(na.length&&!feasible(na))) continue;
+      const d=cost(na)+cost(nb)-cost(cl[i])-cost(cl[j]); if(d<bd){ bd=d; best={i,j,s,na,nb}; }
+    }
+    if(!best) break;
+    cl[best.i]=best.na; cl[best.j]=best.nb; cl=cl.filter(c=>c.length);
+  }
+  tours=cl.map(c=>({c,t:evaluate(orderTour(c)).t0})).sort((x,y)=>x.t-y.t).map(x=>({ids:x.c.map(s=>s.id)}));
 }
-function tourView(t){
+function tourView(t,i){
   const seq=orderTour(t.ids.map(id=>stopsById[id]).filter(Boolean)); if(!seq.length) return null;
   const e=evaluate(seq), cap=P.caps.find(c=>c>=e.peak-1e-6), big=P.caps[P.caps.length-1];
-  return {seq,e,cap:cap||big,trucks:cap?1:Math.ceil(e.peak/big)};
+  const giant=seq.some(s=>Math.max(s.L,s.R)>big+1e-6);
+  return {i,seq,e,cap:cap||big,trucks:(!cap&&giant)?Math.ceil(e.peak/big):1,over:!cap&&!giant};
+}
+function assignVehicles(views){
+  // Un véhicule rentré au dépôt peut repartir : les tournées qui ne se chevauchent pas sont enchaînées sur le même véhicule.
+  const veh=[];
+  views.slice().sort((x,y)=>x.e.t0-y.e.t0).forEach(v=>{
+    let k=v.trucks>1?-1:veh.findIndex(w=>!w.multi&&w.end+RELOAD<=v.e.t0);
+    if(k<0){ veh.push({end:0,n:0,cap:0,multi:v.trucks>1}); k=veh.length-1; }
+    const w=veh[k]; w.end=v.e.end; w.n++; w.cap=Math.max(w.cap,v.cap); v.veh=k; v.rot=w.n;
+  });
+  views.forEach(v=>{ const w=veh[v.veh]; v.vcap=w.cap; v.rots=w.n; v.col=COLORS[v.veh%COLORS.length]; v.dash=v.rot>1;
+    v.label="Véhicule "+(v.veh+1)+(w.n>1?" · tournée "+v.rot:""); });
+  views.sort((x,y)=>x.veh-y.veh||x.rot-y.rot);
+  return veh.length+views.reduce((t,v)=>t+v.trucks-1,0);
+}
+function spread(views){
+  // Les arrêts placés au même point (même commune) sont légèrement écartés sur la carte pour rester lisibles.
+  const by=new Map(); views.forEach(v=>v.seq.forEach(s=>{ const k=s.lat.toFixed(3)+","+s.lon.toFixed(3); if(!by.has(k)) by.set(k,[]); by.get(k).push(s); }));
+  const pos=new Map();
+  for(const g of by.values()) g.forEach((s,n)=>{ if(g.length===1){ pos.set(s.id,{lat:s.lat,lon:s.lon}); return; }
+    const a=2*Math.PI*n/g.length, r=0.004+0.0006*g.length; pos.set(s.id,{lat:s.lat+r*Math.sin(a),lon:s.lon+r*1.58*Math.cos(a)}); });
+  return pos;
 }
 function currentPlan(){
   if(!rows.length||rows.some(r=>!r.cur)) return null;
   const g=new Map(); rows.forEach(r=>{ if(!g.has(r.cur)) g.set(r.cur,[]); g.get(r.cur).push(r); });
-  let k=0,m=0,n=0; for(const [,list] of g){ const st=buildStops(list,true); if(!st.length) continue; for(const sl of ["jour","soir"]){ const part=st.filter(x=>x.slot===sl); if(part.length){ const e=evaluate(part); k+=e.km; m+=e.min; } } n++; }
-  return n?{n,km:k,min:m}:null;
+  let k=0,n=0; for(const [,list] of g){ const st=buildStops(list,true); if(!st.length) continue; k+=evaluate(st).km; n++; }
+  return n?{n,km:k}:null;
 }
 
 function render(){
   readParams();
   const views=tours.map(tourView).filter(Boolean);
-  const totKm=views.reduce((t,v)=>t+v.e.km,0), totMin=views.reduce((t,v)=>t+v.e.min,0), nStops=views.reduce((t,v)=>t+v.seq.length,0);
-  $("tiles").innerHTML=[[views.length,"véhicules"],[nStops,"arrêts"],[Math.round(totKm)+" km","distance estimée"],[dur(totMin),"route et temps sur place"]]
+  const nVeh=assignVehicles(views);
+  const totKm=views.reduce((t,v)=>t+v.e.km,0), nStops=views.reduce((t,v)=>t+v.seq.length,0);
+  $("tiles").innerHTML=[[nVeh,"véhicule"+(nVeh>1?"s":"")],[views.length,"tournée"+(views.length>1?"s":"")],[nStops,"arrêt"+(nStops>1?"s":"")],[Math.round(totKm)+" km","distance estimée"]]
     .map(x=>`<div class="tile num"><b>${x[0]}</b><span>${x[1]}</span></div>`).join("");
   const cp=currentPlan(), c=$("cmp");
   if(cp&&views.length){ const dk=Math.round(totKm-cp.km);
     c.hidden=false; c.innerHTML=`<strong>Planning de la capture</strong> : ${cp.n} tournées, ${Math.round(cp.km)} km estimés dans l'ordre de l'écran. <strong>Proposition</strong> : ${views.length} tournées, ${Math.round(totKm)} km (${dk>0?"+":""}${dk} km). Même méthode d'estimation des deux côtés.`;
   } else c.hidden=true;
-  $("tours").innerHTML = views.length ? views.map((v,i)=>{
-    const col=COLORS[i%COLORS.length], chips=[];
-    chips.push(`<span class="chip">${tours[i].slot==="soir"?"Soirée":"Journée"}</span>`);
-    chips.push(`<span class="chip">${fr(v.cap,0)} m</span>`);
+  $("tours").innerHTML = views.length ? views.map(v=>{
+    const i=v.i, chips=[];
+    chips.push(`<span class="chip">${v.e.t0>=13*60?"Après-midi":"Matin"}</span>`);
+    chips.push(`<span class="chip">${fr(v.vcap,0)} m</span>`);
     if(v.trucks>1) chips.push(`<span class="chip crit">Plusieurs camions : ${v.trucks}</span>`);
+    if(v.over) chips.push(`<span class="chip crit">Capacité dépassée</span>`);
+    if(v.e.wait>MAX_WAIT) chips.push(`<span class="chip warn">Attente ${dur(v.e.wait)}</span>`);
     if(v.e.late) chips.push(`<span class="chip warn">${v.e.late} arrêt${v.e.late>1?"s":""} hors créneau</span>`);
     if(v.e.min>P.maxH*60) chips.push(`<span class="chip warn">Dépasse ${fr(P.maxH,1)} h</span>`);
     const li=v.seq.map((s,j)=>{
       const win=(s.a!=null||s.b!=null)?`créneau ${s.a!=null?hhmm(s.a):"…"}-${s.b!=null?hhmm(s.b):"…"}`:"sans créneau";
       const parts=[]; if(s.L) parts.push("livraison "+fr(s.L,2)+" m"); if(s.R) parts.push("reprise "+fr(s.R,2)+" m"); if(!parts.length) parts.push(s.rows.some(r=>r.type==="L")?"livraison":"reprise");
-      const opts=`<option value="">Déplacer…</option>`+views.map((_,k)=>k===i?"":`<option value="${k}">vers véhicule ${k+1}</option>`).join("")+`<option value="new">nouveau véhicule</option>`;
-      return `<li><span class="n">${j+1}</span><div><div class="w">${esc(s.name)} · ${esc(s.ville)} ${esc(s.cp)}</div><div class="d num">${esc(s.clients)} · ${s.rows.length} commande${s.rows.length>1?"s":""} · ${parts.join(", ")}</div><div class="d num">arrivée ${hhmm(v.e.etas[j].t)} · ${win}${v.e.etas[j].late?' <span class="chip warn">en retard</span>':""}</div></div><select class="adv" aria-label="Déplacer l'arrêt ${esc(s.name)}" data-move="${esc(s.id)}" data-from="${i}">${opts}</select></li>`;
+      const docs=s.rows.map(r=>r.doc).filter(Boolean);
+      const opts=`<option value="">Déplacer…</option>`+views.map(o=>o.i===i?"":`<option value="${o.i}">vers ${esc(o.label.toLowerCase())}</option>`).join("")+`<option value="new">nouvelle tournée</option>`;
+      return `<li><span class="n">${j+1}</span><div><div class="w">${esc(s.name)} · ${esc(s.ville)} ${esc(s.cp)}</div><div class="d num">${esc(s.clients)} · ${s.rows.length} commande${s.rows.length>1?"s":""} · ${parts.join(", ")}</div><div class="d num">arrivée ${hhmm(v.e.etas[j].t)} · ${win}${v.e.etas[j].late?' <span class="chip warn">en retard</span>':""}${docs.length?" · doc "+esc(docs.join(", ")):""}</div></div><select class="adv" aria-label="Déplacer l'arrêt ${esc(s.name)}" data-move="${esc(s.id)}" data-from="${i}">${opts}</select></li>`;
     }).join("");
-    return `<article class="tour" style="--c:${col}" data-tour="${i}"><header><div class="t"><b>Véhicule ${i+1}</b>${chips.join("")}</div><div class="meta num">Métrage départ / max / véhicule : ${fr(v.e.start)} / ${fr(v.e.peak)} / ${fr(v.cap,0)} · ${v.seq.length} arrêt${v.seq.length>1?"s":""} · ${Math.round(v.e.km)} km · ${dur(v.e.min)} · départ ${hhmm(v.e.t0)}, retour ${hhmm(v.e.end)}</div></header><ol class="stops">${li}</ol><footer><button type="button" class="ghost small" data-copy="${i}">Copier la feuille de route</button></footer></article>`;
+    return `<article class="tour" style="--c:${v.col}" data-tour="${i}"><header><div class="t"><b>${esc(v.label)}</b>${chips.join("")}</div><div class="meta num">Métrage départ / max / véhicule : ${fr(v.e.start)} / ${fr(v.e.peak)} / ${fr(v.vcap,0)} · ${v.seq.length} arrêt${v.seq.length>1?"s":""} · ${Math.round(v.e.km)} km · ${dur(v.e.min)} · départ ${hhmm(v.e.t0)}, retour ${hhmm(v.e.end)}</div></header><ol class="stops">${li}</ol><footer><button type="button" class="ghost small" data-copy="${i}">Copier la feuille de route</button></footer></article>`;
   }).join("") : `<div class="panel meta">Aucune ligne localisée pour l'instant. Déposez une capture ou rechargez l'exemple.</div>`;
+  window.__views=views; window.__nveh=nVeh;
   drawMap(views);
   $("locate").hidden = !(unlocated&&sampleFn);
   if(unlocated) $("locate").textContent=`Localiser ${unlocated} adresse${unlocated>1?"s":""}`;
   $("source").textContent = exampleLoaded ? "Exemple affiché : une journée type, noms de clients remplacés." : "";
-  window.__views=views;
 }
 let mapMode="svg", lmap=null, llayer=null, gmap=null, gItems=[], routeCache={};
 function realMapReady(mode){ mapMode=mode; $("map").style.display="none"; $("lmap").style.display="block";
@@ -413,28 +464,29 @@ function initRealMap(){
 }
 function drawLeaflet(views){
   if(!lmap){ lmap=L.map("lmap",{scrollWheelZoom:false}); L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:18,attribution:"&copy; OpenStreetMap"}).addTo(lmap); llayer=L.layerGroup().addTo(lmap); }
-  llayer.clearLayers(); const pts=[[P.depot.lat,P.depot.lon]];
-  views.forEach((v,i)=>{ const col=COLORS[i%COLORS.length], soir=tours[i].slot==="soir";
-    const path=[P.depot].concat(v.seq,[P.depot]), straight=path.map(p=>[p.lat,p.lon]);
-    const line=L.polyline(straight,{color:col,weight:4,opacity:.85,dashArray:soir?"8 7":null}).addTo(llayer);
+  llayer.clearLayers(); const pts=[[P.depot.lat,P.depot.lon]], pos=spread(views);
+  views.forEach(v=>{ const col=v.col;
+    const path=[P.depot].concat(v.seq,[P.depot]), straight=[P.depot].concat(v.seq.map(s=>pos.get(s.id)),[P.depot]).map(p=>[p.lat,p.lon]);
+    const line=L.polyline(straight,{color:col,weight:4,opacity:.85,dashArray:v.dash?"8 7":null}).addTo(llayer);
     const key=path.map(p=>p.lon.toFixed(4)+","+p.lat.toFixed(4)).join(";");
     const apply=g=>{ try{ line.setLatLngs(g.map(c=>[c[1],c[0]])); }catch(e){} };
     if(routeCache[key]) apply(routeCache[key]);
     else if(path.length<=26) fetch("https://router.project-osrm.org/route/v1/driving/"+key+"?overview=full&geometries=geojson").then(r=>r.json()).then(j=>{ if(j.routes&&j.routes[0]){ routeCache[key]=j.routes[0].geometry.coordinates; apply(routeCache[key]); } }).catch(()=>{});
-    v.seq.forEach((s,j)=>{ pts.push([s.lat,s.lon]);
-      L.marker([s.lat,s.lon],{icon:L.divIcon({className:"",html:`<div class="pin" style="background:${col}">${j+1}</div>`,iconSize:[24,24],iconAnchor:soir?[2,12]:[12,12]})}).addTo(llayer)
-        .bindTooltip(`Véhicule ${i+1}, arrêt ${j+1} : ${esc(s.name)}, ${esc(s.ville)}`); }); });
+    v.seq.forEach((s,j)=>{ const q=pos.get(s.id); pts.push([q.lat,q.lon]);
+      L.marker([q.lat,q.lon],{icon:L.divIcon({className:"",html:`<div class="pin" style="background:${col}">${j+1}</div>`,iconSize:[24,24],iconAnchor:[12,12]})}).addTo(llayer)
+        .bindTooltip(`${esc(v.label)}, arrêt ${j+1} : ${esc(s.name)}, ${esc(s.ville)}`); }); });
   L.marker([P.depot.lat,P.depot.lon],{icon:L.divIcon({className:"",html:'<div class="pin depot">D</div>',iconSize:[24,24],iconAnchor:[12,12]}),zIndexOffset:500}).addTo(llayer).bindTooltip("Dépôt");
-  lmap.invalidateSize(); lmap.fitBounds(pts,{padding:[30,30],maxZoom:12});
+  lmap.invalidateSize(); lmap.fitBounds(pts,{padding:[30,30],maxZoom:13});
 }
 function drawGoogle(views){
   if(!gmap) gmap=new google.maps.Map($("lmap"),{mapTypeControl:false,streetViewControl:false,fullscreenControl:false,center:{lat:P.depot.lat,lng:P.depot.lon},zoom:9});
   gItems.forEach(o=>o.setMap(null)); gItems=[]; const b=new google.maps.LatLngBounds(); const D={lat:P.depot.lat,lng:P.depot.lon}; b.extend(D);
-  views.forEach((v,i)=>{ const col=COLORS[i%COLORS.length];
-    const path=[D].concat(v.seq.map(s=>({lat:s.lat,lng:s.lon})),[D]);
+  const sp=spread(views);
+  views.forEach(v=>{ const col=v.col;
+    const path=[D].concat(v.seq.map(s=>({lat:sp.get(s.id).lat,lng:sp.get(s.id).lon})),[D]);
     gItems.push(new google.maps.Polyline({path,map:gmap,strokeColor:col,strokeWeight:4,strokeOpacity:.85}));
-    v.seq.forEach((s,j)=>{ const pos={lat:s.lat,lng:s.lon}; b.extend(pos);
-      gItems.push(new google.maps.Marker({position:pos,map:gmap,title:`Véhicule ${i+1}, arrêt ${j+1} : ${s.name}, ${s.ville}`,label:{text:String(j+1),color:"#fff",fontSize:"12px",fontWeight:"600"},
+    v.seq.forEach((s,j)=>{ const pos={lat:sp.get(s.id).lat,lng:sp.get(s.id).lon}; b.extend(pos);
+      gItems.push(new google.maps.Marker({position:pos,map:gmap,title:`${v.label}, arrêt ${j+1} : ${s.name}, ${s.ville}`,label:{text:String(j+1),color:"#fff",fontSize:"12px",fontWeight:"600"},
         icon:{path:google.maps.SymbolPath.CIRCLE,scale:12,fillColor:col,fillOpacity:1,strokeColor:"#fff",strokeWeight:2}})); }); });
   gItems.push(new google.maps.Marker({position:D,map:gmap,title:"Dépôt",label:{text:"D",color:"#fff",fontSize:"12px",fontWeight:"600"},zIndex:999,
     icon:{path:"M -10 -10 H 10 V 10 H -10 Z",fillColor:"#14292a",fillOpacity:1,strokeColor:"#fff",strokeWeight:2}}));
@@ -443,18 +495,18 @@ function drawGoogle(views){
 function drawMap(views){
   if(mapMode==="l"){ try{ drawLeaflet(views); return; }catch(e){ mapMode="svg"; $("lmap").style.display="none"; $("map").style.display="block"; } }
   if(mapMode==="g"){ try{ drawGoogle(views); return; }catch(e){ mapMode="svg"; $("lmap").style.display="none"; $("map").style.display="block"; } }
-  const pts=[P.depot]; views.forEach(v=>v.seq.forEach(s=>pts.push(s)));
+  const sp=spread(views), pts=[P.depot]; views.forEach(v=>v.seq.forEach(s=>pts.push(sp.get(s.id))));
   let x0=Math.min(...pts.map(p=>p.lon)),x1=Math.max(...pts.map(p=>p.lon)),y0=Math.min(...pts.map(p=>p.lat)),y1=Math.max(...pts.map(p=>p.lat));
   const W=760,H=540,cos=Math.cos(50.8*Math.PI/180);
   let dx=Math.max((x1-x0)*1.3,0.5), dy=Math.max((y1-y0)*1.3,0.32); const cx=(x0+x1)/2, cy=(y0+y1)/2;
   const sc=Math.min(W/(dx*cos),H/dy), X=lon=>W/2+(lon-cx)*cos*sc, Y=lat=>H/2-(lat-cy)*sc;
   let h=`<polygon points="${BE.map(p=>X(p[0]).toFixed(1)+","+Y(p[1]).toFixed(1)).join(" ")}" fill="var(--panel)" stroke="var(--line)" stroke-width="2"/>`;
   CITIES.forEach(c=>{ const x=X(c[1]),y=Y(c[2]); if(x<8||x>W-8||y<8||y>H-8) return; h+=`<circle cx="${x}" cy="${y}" r="2" fill="var(--muted)" opacity=".6"/><text x="${x+5}" y="${y-5}" font-size="11" fill="var(--muted)" opacity=".8">${c[0]}</text>`; });
-  views.forEach((v,i)=>{ const col=COLORS[i%COLORS.length];
-    const path=[P.depot].concat(v.seq,[P.depot]).map(p=>X(p.lon).toFixed(1)+","+Y(p.lat).toFixed(1)).join(" ");
-    h+=`<g data-tour="${i}"><polyline points="${path}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" opacity=".85"${tours[i].slot==="soir"?' stroke-dasharray="6 5"':""}/>`;
-    v.seq.forEach((s,j)=>{ const x=X(s.lon),y=Y(s.lat)+(tours[i].slot==="soir"?14:0);
-      h+=`<circle cx="${x}" cy="${y}" r="10" fill="${col}" stroke="var(--panel)" stroke-width="2"><title>Tournée ${i+1}, arrêt ${j+1} : ${esc(s.name)}, ${esc(s.ville)}</title></circle><text x="${x}" y="${y+4}" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">${j+1}</text><text x="${x+13}" y="${y+4}" font-size="11" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="var(--panel)" stroke-width="3">${esc(s.ville)}</text>`; });
+  views.forEach(v=>{ const col=v.col, i=v.i;
+    const path=[P.depot].concat(v.seq.map(s=>sp.get(s.id)),[P.depot]).map(p=>X(p.lon).toFixed(1)+","+Y(p.lat).toFixed(1)).join(" ");
+    h+=`<g data-tour="${i}"><polyline points="${path}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" opacity=".85"${v.dash?' stroke-dasharray="6 5"':""}/>`;
+    v.seq.forEach((s,j)=>{ const x=X(sp.get(s.id).lon),y=Y(sp.get(s.id).lat);
+      h+=`<circle cx="${x}" cy="${y}" r="10" fill="${col}" stroke="var(--panel)" stroke-width="2"><title>${esc(v.label)}, arrêt ${j+1} : ${esc(s.name)}, ${esc(s.ville)}</title></circle><text x="${x}" y="${y+4}" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">${j+1}</text><text x="${x+13}" y="${y+4}" font-size="11" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="var(--panel)" stroke-width="3">${esc(s.ville)}</text>`; });
     h+=`</g>`; });
   const dxp=X(P.depot.lon), dyp=Y(P.depot.lat);
   h+=`<rect x="${dxp-8}" y="${dyp-8}" width="16" height="16" rx="3" fill="var(--ink)" stroke="var(--panel)" stroke-width="2"/><text x="${dxp}" y="${dyp-13}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="var(--panel)" stroke-width="3">Dépôt</text>`;
@@ -478,10 +530,10 @@ function setStatus(msg,err){ const s=$("status"); s.textContent=msg||""; s.class
 function loadExample(){ rows=EX.map(mkRow); exampleLoaded=true; refresh(true); }
 
 function roadSheet(i){
-  const v=window.__views[i]; if(!v) return "";
-  const L=[`VÉHICULE ${i+1} · ${fr(v.cap,0)} m${v.trucks>1?" · PLUSIEURS CAMIONS ("+v.trucks+")":""}`,`Départ dépôt ${hhmm(v.e.t0)} · retour ${hhmm(v.e.end)} · ${Math.round(v.e.km)} km · métrage départ/max ${fr(v.e.start)}/${fr(v.e.peak)}`];
+  const v=(window.__views||[]).find(x=>x.i===i); if(!v) return "";
+  const L=[`${v.label.toUpperCase()} · ${fr(v.vcap,0)} m${v.trucks>1?" · PLUSIEURS CAMIONS ("+v.trucks+")":""}${v.over?" · CAPACITÉ DÉPASSÉE":""}`,`Départ dépôt ${hhmm(v.e.t0)} · retour ${hhmm(v.e.end)} · ${Math.round(v.e.km)} km · métrage départ/max ${fr(v.e.start)}/${fr(v.e.peak)}`];
   v.seq.forEach((s,j)=>{ L.push(`${j+1}. ${hhmm(v.e.etas[j].t)}  ${s.name}, ${s.cp} ${s.ville}  [${s.a!=null?hhmm(s.a):"…"}-${s.b!=null?hhmm(s.b):"…"}]`);
-    s.rows.forEach(r=>L.push(`     ${r.type==="L"?"Livraison":"Reprise"} ${fr(r.m,2)} m · ${r.client}`)); });
+    s.rows.forEach(r=>L.push(`     ${r.type==="L"?"Livraison":"Reprise"} ${fr(r.m,2)} m · ${r.client}${r.doc?" · doc "+r.doc:""}`)); });
   return L.join("\n");
 }
 function copyText(txt){
@@ -502,7 +554,7 @@ function shrink(file){ return new Promise(res=>{ const img=new Image(), url=URL.
     const c=document.createElement("canvas"); c.width=Math.round(img.width*k); c.height=Math.round(img.height*k); c.getContext("2d").drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(url); c.toBlob(b=>res(b||file),"image/jpeg",0.92); };
   img.onerror=()=>{URL.revokeObjectURL(url);res(file);}; img.src=url; }); }
 function fromLigne(l){ const ok=isFinite(+l.lat)&&isFinite(+l.lon)&&+l.lat>49&&+l.lat<52&&+l.lon>2&&+l.lon<7;
-  return mkRow([l.client,l.lieu,l.ville,l.cp,parseFloat(String(l.metrage).replace(",", "."))||0,/client/i.test(l.vers||"")?"L":"R",l.debut,l.fin,l.tournee,ok?+l.lat:null,ok?+l.lon:null,!!l.incertain]); }
+  return mkRow([l.client,l.lieu,l.ville,l.cp,parseFloat(String(l.metrage).replace(",", "."))||0,/client/i.test(l.vers||"")?"L":"R",l.debut,l.fin,l.tournee,ok?+l.lat:null,ok?+l.lon:null,!!l.incertain,l.doc]); }
 let busy=false;
 async function readCaptures(files){
   files=[...files].filter(f=>f.type.startsWith("image/")); if(!files.length||busy) return;
@@ -556,11 +608,11 @@ $("rows").addEventListener("click",e=>{ const d=e.target.dataset.del; if(!d) ret
 $("tours").addEventListener("change",e=>{
   const id=e.target.dataset.move; if(!id||!e.target.value) return; const from=+e.target.dataset.from, to=e.target.value;
   tours[from].ids=tours[from].ids.filter(x=>x!==id);
-  if(to==="new") tours.push({slot:stopsById[id].slot,ids:[id]}); else tours[+to].ids.push(id);
+  if(to==="new") tours.push({ids:[id]}); else tours[+to].ids.push(id);
   tours=tours.filter(t=>t.ids.length); render();
 });
 $("tours").addEventListener("click",e=>{ const c=e.target.dataset.copy; if(c!=null) copyText(roadSheet(+c)); });
-$("copyall").onclick=()=>copyText((window.__views||[]).map((_,i)=>roadSheet(i)).join("\n\n"));
+$("copyall").onclick=()=>copyText((window.__views||[]).map(v=>roadSheet(v.i)).join("\n\n"));
 function hl(i){ document.querySelectorAll("#map g[data-tour]").forEach(g=>g.style.opacity=(i==null||g.dataset.tour==i)?1:.15); }
 $("tours").addEventListener("mouseover",e=>{ const a=e.target.closest(".tour"); if(a) hl(a.dataset.tour); });
 $("tours").addEventListener("mouseleave",()=>hl(null));
