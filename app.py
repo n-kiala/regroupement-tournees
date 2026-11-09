@@ -22,7 +22,7 @@ HTML = (pathlib.Path(__file__).parent / "tournees.html").read_text(encoding="utf
 
 PROMPT = """Tu lis une capture d'écran (ou une photo d'écran) du planning d'un logiciel de livraisons d'un loueur de matériel événementiel en Belgique.
 Le tableau alterne des bandeaux de tournée (dates, « N° parc : X », « Equipage ») et des lignes de commande. Colonnes d'une ligne, de gauche à droite : Client | Nom du lieu | Ville | code postal à 4 chiffres | numéro d'ordre | métrage (décimal à virgule) | icône | Vers (« Bruxelles » ou « Client ») | Horaires (date puis hh:mm - hh:mm) | numéros de document.
-Champs de chaque ligne : client, lieu, ville, cp, metrage (nombre), vers, debut et fin au format HH:MM, tournee, lat, lon, incertain.
+Champs de chaque ligne : client, lieu, ville, cp, metrage (nombre), vers, debut et fin au format HH:MM, tournee, lat, lon, incertain, doc (le premier numéro de document à droite des horaires, chiffres seulement, chaîne vide s'il est illisible).
 Règles : une entrée par ligne de commande visible, dans l'ordre de l'écran. "tournee" = le N° parc du bandeau placé au-dessus de la ligne, chaîne vide si le bandeau n'en a pas. "lat" et "lon" = centre approximatif de la commune belge correspondant au code postal, en degrés décimaux. N'invente aucune ligne. Si une cellule est illisible, laisse-la vide et mets "incertain" à true. Si l'image ne contient aucun planning, transmets une liste vide."""
 
 
@@ -49,7 +49,7 @@ CHAMPS = {
     "client": {"type": "string"}, "lieu": {"type": "string"}, "ville": {"type": "string"},
     "cp": {"type": "string"}, "metrage": {"type": "number"}, "vers": {"type": "string"},
     "debut": {"type": "string"}, "fin": {"type": "string"}, "tournee": {"type": "string"},
-    "lat": {"type": "number"}, "lon": {"type": "number"}, "incertain": {"type": "boolean"},
+    "lat": {"type": "number"}, "lon": {"type": "number"}, "incertain": {"type": "boolean"}, "doc": {"type": "string"},
 }
 SCHEMA = {
     "type": "object",
@@ -100,6 +100,20 @@ def read_capture(uploaded, api_key, model):
     raise derniere
 
 
+def fusionner(lots):
+    """Réunit les lignes de plusieurs captures. Deux captures qui se recouvrent donnent les mêmes numéros de document : on ne garde la ligne qu'une fois."""
+    vus, sortie = set(), []
+    for lignes in lots:
+        for l in lignes:
+            doc = "".join(c for c in str(l.get("doc") or "") if c.isdigit())
+            if len(doc) >= 5:
+                if doc in vus:
+                    continue
+                vus.add(doc)
+            sortie.append(l)
+    return sortie
+
+
 # Accès protégé par un code, si ACCESS_CODE est défini dans les secrets.
 code = secret("ACCESS_CODE")
 if code and not st.session_state.get("ok"):
@@ -133,13 +147,14 @@ if signature != st.session_state.get("signature"):
     if fichiers and not api_key:
         st.session_state["erreur"] = "La clé ANTHROPIC_API_KEY manque dans les secrets de l'application : la lecture des captures est désactivée."
     elif fichiers:
-        lues, erreurs = [], []
+        lots, erreurs = [], []
         for f in fichiers:
             with st.spinner(f"Lecture de {f.name}… (30 secondes environ)"):
                 try:
-                    lues += read_capture(f, api_key, model)
+                    lots.append(read_capture(f, api_key, model))
                 except Exception as e:  # message lisible plutôt qu'une trace
                     erreurs.append(f"Lecture impossible pour {f.name} : {e}")
+        lues = fusionner(lots)
         st.session_state["lignes"] = lues
         if erreurs:
             st.session_state["erreur"] = " ".join(erreurs)
