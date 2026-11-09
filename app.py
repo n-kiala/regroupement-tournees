@@ -5,6 +5,7 @@ Entrée : une capture du planning. Sortie : le trajet optimisé par véhicule. S
     ANTHROPIC_API_KEY = "sk-ant-..."     # obligatoire pour lire une capture
     ACCESS_CODE = "un-code-pour-joel"    # facultatif, protège l'accès
     MODEL = "claude-sonnet-5-5"          # facultatif
+    GOOGLE_MAPS_API_KEY = "AIza..."      # facultatif : carte Google Maps au lieu d'OpenStreetMap
 """
 import base64
 import io
@@ -121,5 +122,5 @@ if st.session_state.get("erreur"):
 
 lignes = st.session_state["lignes"]
 if lignes:
-    inject = "window.__STREAMLIT__=true;window.__ROWS__=" + json.dumps(lignes, ensure_ascii=False).replace("</", "<\\/") + ";"
+    inject = "window.__GMAPS_KEY__=" + json.dumps(secret("GOOGLE_MAPS_API_KEY")) + ";window.__STREAMLIT__=true;window.__ROWS__=" + json.dumps(lignes, ensure_ascii=False).replace("</", "<\\/") + ";"
     components.html(HTML.replace("/*__INJECT__*/", inject), height=2200, scrolling=True)
