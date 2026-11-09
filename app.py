@@ -51,47 +51,51 @@ CHAMPS = {
     "debut": {"type": "string"}, "fin": {"type": "string"}, "tournee": {"type": "string"},
     "lat": {"type": "number"}, "lon": {"type": "number"}, "incertain": {"type": "boolean"},
 }
-OUTIL = {
-    "name": "enregistrer_lignes",
-    "description": "Enregistre les lignes de commande lues sur la capture du planning.",
-    "input_schema": {
-        "type": "object",
-        "properties": {"lignes": {"type": "array", "items": {"type": "object", "properties": CHAMPS, "required": ["ville", "cp"]}}},
-        "required": ["lignes"],
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "lignes": {
+            "type": "array",
+            "items": {"type": "object", "properties": CHAMPS, "required": list(CHAMPS), "additionalProperties": False},
+        }
     },
+    "required": ["lignes"],
+    "additionalProperties": False,
 }
+CONSIGNE_JSON = (
+    "\nRéponds UNIQUEMENT par un objet JSON de la forme {\"lignes\": [...]}, sans texte autour. "
+    "Chaque ligne contient tous les champs ; une cellule illisible vaut une chaîne vide, ou 0 pour un nombre."
+)
 
 
 def read_capture(uploaded, api_key, model):
-    """Lit une capture. La réponse passe par un outil, ce qui garantit des données bien formées."""
+    """Lit une capture. La sortie structurée de l'API garantit un JSON valide ; repli sur un JSON libre si elle est refusée."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
-    image = prepare_image(uploaded)
+    contenu = [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": prepare_image(uploaded)}},
+        {"type": "text", "text": PROMPT + CONSIGNE_JSON},
+    ]
+
+    def appel(structure):
+        extra = {"output_config": {"format": {"type": "json_schema", "schema": SCHEMA}}} if structure else {}
+        resp = client.messages.create(model=model, max_tokens=16000, messages=[{"role": "user", "content": contenu}], **extra)
+        if resp.stop_reason == "max_tokens":
+            raise RuntimeError("réponse trop longue : découpez la liste en deux captures")
+        texte = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+        data = json.loads(texte[texte.index("{"): texte.rindex("}") + 1])
+        return [l for l in data.get("lignes", []) if isinstance(l, dict)]
+
+    try:
+        return appel(True)
+    except (anthropic.BadRequestError, TypeError):
+        pass  # sortie structurée refusée par ce modèle ou cette version du SDK
     derniere = None
-    for _ in range(2):  # une seconde tentative si la première réponse est inexploitable
+    for _ in range(2):
         try:
-            resp = client.messages.create(
-                model=model,
-                max_tokens=16000,
-                tools=[OUTIL],
-                tool_choice={"type": "tool", "name": "enregistrer_lignes"},
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
-                        {"type": "text", "text": PROMPT + "\nTransmets le résultat avec l'outil enregistrer_lignes."},
-                    ],
-                }],
-            )
-            for bloc in resp.content:
-                if getattr(bloc, "type", "") == "tool_use":
-                    lignes = bloc.input.get("lignes", [])
-                    if isinstance(lignes, str):
-                        lignes = json.loads(lignes)
-                    return [l for l in lignes if isinstance(l, dict)]
-            derniere = RuntimeError("réponse sans données")
-        except (ValueError, KeyError) as e:
+            return appel(False)
+        except ValueError as e:
             derniere = e
     raise derniere
 
