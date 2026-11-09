@@ -22,9 +22,8 @@ HTML = (pathlib.Path(__file__).parent / "tournees.html").read_text(encoding="utf
 
 PROMPT = """Tu lis une capture d'écran (ou une photo d'écran) du planning d'un logiciel de livraisons d'un loueur de matériel événementiel en Belgique.
 Le tableau alterne des bandeaux de tournée (dates, « N° parc : X », « Equipage ») et des lignes de commande. Colonnes d'une ligne, de gauche à droite : Client | Nom du lieu | Ville | code postal à 4 chiffres | numéro d'ordre | métrage (décimal à virgule) | icône | Vers (« Bruxelles » ou « Client ») | Horaires (date puis hh:mm - hh:mm) | numéros de document.
-Réponds UNIQUEMENT par un objet JSON, sans texte autour :
-{"lignes":[{"client":"","lieu":"","ville":"","cp":"","metrage":0,"vers":"","debut":"HH:MM","fin":"HH:MM","tournee":"","lat":0,"lon":0,"incertain":false}]}
-Règles : une entrée par ligne de commande visible, dans l'ordre de l'écran. "tournee" = le N° parc du bandeau placé au-dessus de la ligne, chaîne vide si le bandeau n'en a pas. "lat" et "lon" = centre approximatif de la commune belge correspondant au code postal, en degrés décimaux. N'invente aucune ligne. Si une cellule est illisible, laisse-la vide et mets "incertain" à true. Si l'image ne contient aucun planning, renvoie {"lignes":[]}."""
+Champs de chaque ligne : client, lieu, ville, cp, metrage (nombre), vers, debut et fin au format HH:MM, tournee, lat, lon, incertain.
+Règles : une entrée par ligne de commande visible, dans l'ordre de l'écran. "tournee" = le N° parc du bandeau placé au-dessus de la ligne, chaîne vide si le bandeau n'en a pas. "lat" et "lon" = centre approximatif de la commune belge correspondant au code postal, en degrés décimaux. N'invente aucune ligne. Si une cellule est illisible, laisse-la vide et mets "incertain" à true. Si l'image ne contient aucun planning, transmets une liste vide."""
 
 
 def secret(name, default=""):
@@ -46,25 +45,55 @@ def prepare_image(uploaded):
     return base64.standard_b64encode(buf.getvalue()).decode()
 
 
+CHAMPS = {
+    "client": {"type": "string"}, "lieu": {"type": "string"}, "ville": {"type": "string"},
+    "cp": {"type": "string"}, "metrage": {"type": "number"}, "vers": {"type": "string"},
+    "debut": {"type": "string"}, "fin": {"type": "string"}, "tournee": {"type": "string"},
+    "lat": {"type": "number"}, "lon": {"type": "number"}, "incertain": {"type": "boolean"},
+}
+OUTIL = {
+    "name": "enregistrer_lignes",
+    "description": "Enregistre les lignes de commande lues sur la capture du planning.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"lignes": {"type": "array", "items": {"type": "object", "properties": CHAMPS, "required": ["ville", "cp"]}}},
+        "required": ["lignes"],
+    },
+}
+
+
 def read_capture(uploaded, api_key, model):
+    """Lit une capture. La réponse passe par un outil, ce qui garantit des données bien formées."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
-    resp = client.messages.create(
-        model=model,
-        max_tokens=8000,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": prepare_image(uploaded)}},
-                {"type": "text", "text": PROMPT},
-            ],
-        }],
-    )
-    text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-    data = json.loads(text[text.index("{"): text.rindex("}") + 1])
-    lignes = data.get("lignes", [])
-    return [l for l in lignes if isinstance(l, dict)]
+    image = prepare_image(uploaded)
+    derniere = None
+    for _ in range(2):  # une seconde tentative si la première réponse est inexploitable
+        try:
+            resp = client.messages.create(
+                model=model,
+                max_tokens=16000,
+                tools=[OUTIL],
+                tool_choice={"type": "tool", "name": "enregistrer_lignes"},
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
+                        {"type": "text", "text": PROMPT + "\nTransmets le résultat avec l'outil enregistrer_lignes."},
+                    ],
+                }],
+            )
+            for bloc in resp.content:
+                if getattr(bloc, "type", "") == "tool_use":
+                    lignes = bloc.input.get("lignes", [])
+                    if isinstance(lignes, str):
+                        lignes = json.loads(lignes)
+                    return [l for l in lignes if isinstance(l, dict)]
+            derniere = RuntimeError("réponse sans données")
+        except (ValueError, KeyError) as e:
+            derniere = e
+    raise derniere
 
 
 # Accès protégé par un code, si ACCESS_CODE est défini dans les secrets.
