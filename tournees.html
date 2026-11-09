@@ -60,6 +60,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 @media (max-width:900px){.main{grid-template-columns:minmax(0,1fr)}}
 .mapbox{position:sticky;top:12px}
 @media (max-width:900px){.mapbox{position:static}}
+#lmap{height:520px;border-radius:8px;display:none;z-index:0}
+.pin{width:24px;height:24px;border-radius:50%;color:#fff;font:600 12px/20px system-ui,sans-serif;text-align:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)}
+.pin.depot{border-radius:4px;background:#14292a}
 svg#map{width:100%;height:auto;display:block;background:var(--band);border-radius:8px}
 .tours{display:flex;flex-direction:column;gap:12px}
 .tour{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--c);border-radius:10px;overflow:hidden}
@@ -129,8 +132,9 @@ body.simple .wrap{padding-top:4px}
   <div class="main">
     <div class="panel mapbox">
       <h2>Carte</h2>
+      <div id="lmap"></div>
       <svg id="map" viewBox="0 0 760 540" role="img" aria-label="Carte schématique des tournées proposées"></svg>
-      <div class="legend">Fond schématique (frontière et villes repères). Les tracés relient les arrêts en ligne droite, les kilomètres sont estimés à vol d'oiseau avec une majoration routière.</div>
+      <div class="legend" id="maplegend">Fond schématique (frontière et villes repères). Les tracés relient les arrêts en ligne droite, les kilomètres sont estimés à vol d'oiseau avec une majoration routière.</div>
     </div>
     <div>
       <div class="row" style="justify-content:space-between;margin-bottom:10px">
@@ -166,7 +170,7 @@ body.simple .wrap{padding-top:4px}
         <input id="p-speed" type="number" min="20" max="90" value="50">
       </label>
       <label>Dépôt (latitude, longitude)
-        <input id="p-depot" value="50.846, 4.352">
+        <input id="p-depot" value="50.803, 4.310">
       </label>
       <label class="check"><input id="p-strict" type="checkbox" checked> Scinder une tournée plutôt que d'arriver hors créneau</label>
     </div>
@@ -194,7 +198,7 @@ body.simple .wrap{padding-top:4px}
     <ul class="hyp">
       <li>La colonne chiffrée de chaque ligne est lue comme le métrage de la commande. Sur la capture du 30/10/26, la somme des lignes de la tournée DAF1 donne 5,0, soit le « Métrage max » affiché dans son bandeau.</li>
       <li>La colonne « Vers » est interprétée ainsi : « Client » pour une livraison, « Bruxelles » pour une reprise vers le dépôt. Le sens se corrige ligne par ligne.</li>
-      <li>Le dépôt est placé au centre de Bruxelles faute d'adresse confirmée. Sa position se règle dans les règles de regroupement.</li>
+      <li>Le départ et le retour se font au dépôt, Rue Lieutenant Lotin 40, 1190 Forest.</li>
       <li>Les capacités 5, 6 et 8 mètres viennent de l'entretien du 9 novembre. Une commande qui dépasse le plus grand véhicule est signalée « Plusieurs camions », comme dans le logiciel actuel.</li>
       <li>Les adresses sont placées au centre de leur commune. La version suivante utilisera l'adresse exacte et les temps de route réels.</li>
     </ul>
@@ -243,7 +247,7 @@ function readParams(){
   P.maxH = +$("p-maxh").value||8; P.maxStops = +$("p-maxstops").value||12;
   P.stop = +$("p-stop").value||0; P.speed = +$("p-speed").value||50; P.strict = $("p-strict").checked;
   const d = $("p-depot").value.split(/[;, ]+/).map(Number);
-  P.depot = (d.length>=2 && isFinite(d[0]) && isFinite(d[1]) && d[0]) ? {lat:d[0],lon:d[1]} : {lat:50.846,lon:4.352};
+  P.depot = (d.length>=2 && isFinite(d[0]) && isFinite(d[1]) && d[0]) ? {lat:d[0],lon:d[1]} : {lat:50.803,lon:4.310};
 }
 const toMin = s => { const m=/^(\d{1,2})\s*[:hH.]\s*(\d{2})$/.exec(String(s||"").trim()); return m ? (+m[1])*60+(+m[2]) : null; };
 const hhmm = t => { t=Math.round(t); t=((t%1440)+1440)%1440; return String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0"); };
@@ -394,7 +398,51 @@ function render(){
   $("source").textContent = exampleLoaded ? "Exemple affiché : une journée type, noms de clients remplacés." : "";
   window.__views=views;
 }
+let mapMode="svg", lmap=null, llayer=null, gmap=null, gItems=[], routeCache={};
+function realMapReady(mode){ mapMode=mode; $("map").style.display="none"; $("lmap").style.display="block";
+  $("maplegend").textContent = mode==="g" ? "Carte Google Maps. Les tracés relient les arrêts dans l'ordre de passage ; kilomètres et durées restent des estimations." : "Carte OpenStreetMap. Les tracés suivent la route quand le calcul d'itinéraire répond, sinon la ligne droite ; kilomètres et durées restent des estimations.";
+  if(window.__views) drawMap(window.__views); }
+function loadScript(src,ok,ko){ const e=document.createElement("script"); e.src=src; e.onload=ok; e.onerror=ko||(()=>{}); document.head.appendChild(e); }
+function initRealMap(){
+  if(!window.__STREAMLIT__) return;
+  const leaflet=()=>{ const c=document.createElement("link"); c.rel="stylesheet"; c.href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"; document.head.appendChild(c);
+    loadScript("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",()=>realMapReady("l")); };
+  if(window.__GMAPS_KEY__){ window.__gmapsReady=()=>realMapReady("g"); window.gm_authFailure=()=>{ mapMode="svg"; leaflet(); };
+    loadScript("https://maps.googleapis.com/maps/api/js?key="+encodeURIComponent(window.__GMAPS_KEY__)+"&callback=__gmapsReady&loading=async",null,leaflet); }
+  else leaflet();
+}
+function drawLeaflet(views){
+  if(!lmap){ lmap=L.map("lmap",{scrollWheelZoom:false}); L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:18,attribution:"&copy; OpenStreetMap"}).addTo(lmap); llayer=L.layerGroup().addTo(lmap); }
+  llayer.clearLayers(); const pts=[[P.depot.lat,P.depot.lon]];
+  views.forEach((v,i)=>{ const col=COLORS[i%COLORS.length], soir=tours[i].slot==="soir";
+    const path=[P.depot].concat(v.seq,[P.depot]), straight=path.map(p=>[p.lat,p.lon]);
+    const line=L.polyline(straight,{color:col,weight:4,opacity:.85,dashArray:soir?"8 7":null}).addTo(llayer);
+    const key=path.map(p=>p.lon.toFixed(4)+","+p.lat.toFixed(4)).join(";");
+    const apply=g=>{ try{ line.setLatLngs(g.map(c=>[c[1],c[0]])); }catch(e){} };
+    if(routeCache[key]) apply(routeCache[key]);
+    else if(path.length<=26) fetch("https://router.project-osrm.org/route/v1/driving/"+key+"?overview=full&geometries=geojson").then(r=>r.json()).then(j=>{ if(j.routes&&j.routes[0]){ routeCache[key]=j.routes[0].geometry.coordinates; apply(routeCache[key]); } }).catch(()=>{});
+    v.seq.forEach((s,j)=>{ pts.push([s.lat,s.lon]);
+      L.marker([s.lat,s.lon],{icon:L.divIcon({className:"",html:`<div class="pin" style="background:${col}">${j+1}</div>`,iconSize:[24,24],iconAnchor:soir?[2,12]:[12,12]})}).addTo(llayer)
+        .bindTooltip(`Véhicule ${i+1}, arrêt ${j+1} : ${esc(s.name)}, ${esc(s.ville)}`); }); });
+  L.marker([P.depot.lat,P.depot.lon],{icon:L.divIcon({className:"",html:'<div class="pin depot">D</div>',iconSize:[24,24],iconAnchor:[12,12]}),zIndexOffset:500}).addTo(llayer).bindTooltip("Dépôt");
+  lmap.invalidateSize(); lmap.fitBounds(pts,{padding:[30,30],maxZoom:12});
+}
+function drawGoogle(views){
+  if(!gmap) gmap=new google.maps.Map($("lmap"),{mapTypeControl:false,streetViewControl:false,fullscreenControl:false,center:{lat:P.depot.lat,lng:P.depot.lon},zoom:9});
+  gItems.forEach(o=>o.setMap(null)); gItems=[]; const b=new google.maps.LatLngBounds(); const D={lat:P.depot.lat,lng:P.depot.lon}; b.extend(D);
+  views.forEach((v,i)=>{ const col=COLORS[i%COLORS.length];
+    const path=[D].concat(v.seq.map(s=>({lat:s.lat,lng:s.lon})),[D]);
+    gItems.push(new google.maps.Polyline({path,map:gmap,strokeColor:col,strokeWeight:4,strokeOpacity:.85}));
+    v.seq.forEach((s,j)=>{ const pos={lat:s.lat,lng:s.lon}; b.extend(pos);
+      gItems.push(new google.maps.Marker({position:pos,map:gmap,title:`Véhicule ${i+1}, arrêt ${j+1} : ${s.name}, ${s.ville}`,label:{text:String(j+1),color:"#fff",fontSize:"12px",fontWeight:"600"},
+        icon:{path:google.maps.SymbolPath.CIRCLE,scale:12,fillColor:col,fillOpacity:1,strokeColor:"#fff",strokeWeight:2}})); }); });
+  gItems.push(new google.maps.Marker({position:D,map:gmap,title:"Dépôt",label:{text:"D",color:"#fff",fontSize:"12px",fontWeight:"600"},zIndex:999,
+    icon:{path:"M -10 -10 H 10 V 10 H -10 Z",fillColor:"#14292a",fillOpacity:1,strokeColor:"#fff",strokeWeight:2}}));
+  gmap.fitBounds(b,40);
+}
 function drawMap(views){
+  if(mapMode==="l"){ try{ drawLeaflet(views); return; }catch(e){ mapMode="svg"; $("lmap").style.display="none"; $("map").style.display="block"; } }
+  if(mapMode==="g"){ try{ drawGoogle(views); return; }catch(e){ mapMode="svg"; $("lmap").style.display="none"; $("map").style.display="block"; } }
   const pts=[P.depot]; views.forEach(v=>v.seq.forEach(s=>pts.push(s)));
   let x0=Math.min(...pts.map(p=>p.lon)),x1=Math.max(...pts.map(p=>p.lon)),y0=Math.min(...pts.map(p=>p.lat)),y1=Math.max(...pts.map(p=>p.lat));
   const W=760,H=540,cos=Math.cos(50.8*Math.PI/180);
@@ -517,6 +565,14 @@ function hl(i){ document.querySelectorAll("#map g[data-tour]").forEach(g=>g.styl
 $("tours").addEventListener("mouseover",e=>{ const a=e.target.closest(".tour"); if(a) hl(a.dataset.tour); });
 $("tours").addEventListener("mouseleave",()=>hl(null));
 
+initRealMap();
+// Position exacte du dépôt (Rue Lieutenant Lotin 40, 1190 Forest), recherchée une fois puis gardée pour la session.
+(function(){ const set=v=>{ $("p-depot").value=v; refresh(false); };
+  let saved=null; try{ saved=sessionStorage.getItem("depot"); }catch(e){}
+  if(saved){ $("p-depot").value=saved; return; }
+  fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=be&q="+encodeURIComponent("40 Rue Lieutenant Lotin, 1190 Forest")).then(r=>r.json()).then(j=>{
+    if(j&&j[0]&&+j[0].lat>50.7&&+j[0].lat<50.9&&+j[0].lon>4.2&&+j[0].lon<4.45){ const v=(+j[0].lat).toFixed(5)+", "+(+j[0].lon).toFixed(5); try{ sessionStorage.setItem("depot",v); }catch(e){} set(v); } }).catch(()=>{});
+})();
 if(window.__STREAMLIT__){ document.body.classList.add("simple"); $("drop").style.display="none"; const m=$("more"); m.hidden=false; m.onclick=()=>{ document.body.classList.remove("simple"); m.hidden=true; }; }
 if(Array.isArray(window.__ROWS__)&&window.__ROWS__.length){ rows=window.__ROWS__.map(fromLigne); exampleLoaded=false; refresh(true); } else loadExample();
 (async()=>{ try{ if(window.claude&&window.claude.use){ const s=await window.claude.use("sample"); if(s){ let ok=true; try{ const lim=await s.limits(); ok=!!lim.images; }catch(e){} if(ok){ sampleFn=s; render(); } } } }catch(e){} })();
