@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Regroupement des tournées Options</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout : bandeau de dépôt de capture, synthèse, puis carte à gauche et tournées à droite, lignes lues en dessous. */
+:root{
+  --bg:#f1f4f3; --panel:#ffffff; --ink:#14292a; --muted:#5c7071; --line:#d5dedd;
+  --accent:#0b6b63; --accent-ink:#ffffff; --band:#e2efed;
+  --warn:#a45a00; --warn-bg:#fdefd8; --crit:#b3261e; --crit-bg:#fbe3e1; --ok:#1d7a3e;
+  --display:"Bricolage Grotesque","Trebuchet MS",sans-serif;
+  --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1a1b; --panel:#172627; --ink:#e4eeed; --muted:#93a8a8; --line:#2b4041;
+    --accent:#4fc4b8; --accent-ink:#06211f; --band:#1d3334;
+    --warn:#f2b866; --warn-bg:#3a2a10; --crit:#ff8a80; --crit-bg:#401917; --ok:#6fd08c;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1a1b; --panel:#172627; --ink:#e4eeed; --muted:#93a8a8; --line:#2b4041;
+  --accent:#4fc4b8; --accent-ink:#06211f; --band:#1d3334;
+  --warn:#f2b866; --warn-bg:#3a2a10; --crit:#ff8a80; --crit-bg:#401917; --ok:#6fd08c;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.45}
+.wrap{max-width:1240px;margin:0 auto;padding:20px 16px 48px;display:flex;flex-direction:column;gap:18px}
+h1{font-family:var(--display);font-weight:700;font-size:28px;line-height:1.1;margin:0;text-wrap:balance}
+h2{font-family:var(--display);font-weight:700;font-size:19px;margin:0;text-wrap:balance}
+.sub{color:var(--muted);margin:4px 0 0;max-width:65ch}
+.num{font-variant-numeric:tabular-nums}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.head{display:flex;gap:18px;flex-wrap:wrap;align-items:stretch}
+.head .intro{flex:1 1 320px}
+.drop{flex:1 1 380px;border:2px dashed var(--accent);border-radius:10px;padding:14px 16px;background:var(--panel);display:flex;flex-direction:column;gap:8px;justify-content:center}
+.drop.over{background:var(--band)}
+.drop strong{font-family:var(--display);font-size:17px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,.btn{font:inherit;font-weight:600;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);padding:7px 12px;cursor:pointer}
+button.ghost{background:transparent;color:var(--accent)}
+button.small{padding:3px 8px;font-size:13px}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#status{font-size:14px;color:var(--muted);min-height:1.4em}
+#status.err{color:var(--crit)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.tile b{display:block;font-family:var(--display);font-size:26px;line-height:1.1}
+.tile span{color:var(--muted);font-size:13px}
+.cmp{font-size:14px;padding:10px 14px;border-radius:10px;background:var(--band)}
+.main{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.main{grid-template-columns:minmax(0,1fr)}}
+.mapbox{position:sticky;top:12px}
+@media (max-width:900px){.mapbox{position:static}}
+svg#map{width:100%;height:auto;display:block;background:var(--band);border-radius:8px}
+.tours{display:flex;flex-direction:column;gap:12px}
+.tour{background:var(--panel);border:1px solid var(--line);border-left:6px solid var(--c);border-radius:10px;overflow:hidden}
+.tour header{background:var(--band);padding:9px 12px;display:flex;flex-direction:column;gap:4px}
+.tour header .t{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tour header .t b{font-family:var(--display);font-size:17px}
+.meta{font-size:13.5px;color:var(--muted)}
+.chip{font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;border:1px solid var(--line);background:var(--panel);white-space:nowrap}
+.chip.warn{color:var(--warn);background:var(--warn-bg);border-color:transparent}
+.chip.crit{color:var(--crit);background:var(--crit-bg);border-color:transparent}
+.stops{list-style:none;margin:0;padding:4px 12px 8px}
+.stops li{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:8px;align-items:start;padding:7px 0;border-bottom:1px solid var(--line)}
+.stops li:last-child{border-bottom:0}
+.n{width:24px;height:24px;border-radius:50%;background:var(--c);color:#fff;font-weight:600;font-size:13px;display:grid;place-items:center}
+.stops .w{font-weight:600;overflow-wrap:anywhere}
+.stops .d{font-size:13px;color:var(--muted)}
+.stops select{font:inherit;font-size:12.5px;max-width:120px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:2px}
+.tour footer{padding:0 12px 10px}
+details.panel summary{cursor:pointer;font-family:var(--display);font-weight:700;font-size:17px}
+.params{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:12px}
+.params label{display:flex;flex-direction:column;gap:3px;font-size:13px;color:var(--muted)}
+input,select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 7px;min-width:0}
+.check{flex-direction:row!important;align-items:center;gap:8px!important;color:var(--ink)!important;font-size:14px!important}
+.tablebox{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:900px;font-size:13.5px}
+th{text-align:left;font-weight:600;color:var(--muted);padding:4px 5px;border-bottom:2px solid var(--line);white-space:nowrap}
+td{padding:2px 3px;border-bottom:1px solid var(--line)}
+td input,td select{width:100%;border-color:transparent;background:transparent;padding:4px 5px}
+td input:hover,td select:hover{border-color:var(--line)}
+tr.unsure td:first-child{box-shadow:inset 4px 0 0 var(--warn)}
+tr.noloc td:first-child{box-shadow:inset 4px 0 0 var(--crit)}
+.hyp{margin:8px 0 0;padding-left:18px;max-width:75ch}
+.hyp li{margin:4px 0}
+.legend{font-size:12.5px;color:var(--muted);margin-top:6px}
+#copyout{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;margin-top:8px}
+body.simple .adv{display:none}
+body.simple .wrap{padding-top:4px}
+#more{align-self:flex-start}
+@media (prefers-reduced-motion:no-preference){.drop{transition:background .15s}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head adv">
+    <div class="intro">
+      <h1>Regroupement des tournées</h1>
+      <p class="sub">Les lignes du planning sont lues sur la capture, les adresses regroupées par proximité, puis réparties en tournées qui tiennent dans un véhicule et dans une journée.</p>
+      <p class="sub" id="source"></p>
+    </div>
+    <div class="drop" id="drop">
+      <strong>Déposez une capture du planning ici</strong>
+      <span class="meta">Glissez l'image, collez-la avec Ctrl+V, ou choisissez un fichier. Plusieurs captures s'ajoutent les unes aux autres.</span>
+      <div class="row">
+        <button id="pick" type="button">Choisir une capture</button>
+        <button id="example" type="button" class="ghost">Recharger l'exemple</button>
+        <button id="clear" type="button" class="ghost">Vider la liste</button>
+        <input id="file" type="file" accept="image/*" multiple hidden>
+      </div>
+      <div id="status" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+  <div class="cmp num adv" id="cmp" hidden></div>
+
+  <div class="main">
+    <div class="panel mapbox">
+      <h2>Carte</h2>
+      <svg id="map" viewBox="0 0 760 540" role="img" aria-label="Carte schématique des tournées proposées"></svg>
+      <div class="legend">Fond schématique (frontière et villes repères). Les tracés relient les arrêts en ligne droite, les kilomètres sont estimés à vol d'oiseau avec une majoration routière.</div>
+    </div>
+    <div>
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2>Trajets par véhicule</h2>
+        <button id="copyall" type="button" class="ghost small">Copier toutes les feuilles de route</button>
+      </div>
+      <div class="tours" id="tours"></div>
+      <textarea id="copyout" hidden readonly aria-label="Feuille de route à copier"></textarea>
+    </div>
+  </div>
+
+  <button id="more" type="button" class="ghost small" hidden>Vérifier ou corriger les lignes lues et les réglages</button>
+
+  <details class="panel adv" open>
+    <summary>Règles de regroupement</summary>
+    <div class="params">
+      <label>Regrouper
+        <select id="p-mode"><option value="prox">par proximité (secteurs autour du dépôt)</option><option value="cp">par code postal (2 premiers chiffres)</option></select>
+      </label>
+      <label>Capacités des véhicules, en mètres
+        <input id="p-veh" value="5, 6, 8" inputmode="decimal">
+      </label>
+      <label>Durée maximale d'une tournée (heures)
+        <input id="p-maxh" type="number" min="2" max="14" step="0.5" value="8">
+      </label>
+      <label>Arrêts maximum par tournée
+        <input id="p-maxstops" type="number" min="1" max="40" value="12">
+      </label>
+      <label>Temps sur place par arrêt (minutes)
+        <input id="p-stop" type="number" min="0" max="120" value="25">
+      </label>
+      <label>Vitesse moyenne (km/h)
+        <input id="p-speed" type="number" min="20" max="90" value="50">
+      </label>
+      <label>Dépôt (latitude, longitude)
+        <input id="p-depot" value="50.846, 4.352">
+      </label>
+      <label class="check"><input id="p-strict" type="checkbox" checked> Scinder une tournée plutôt que d'arriver hors créneau</label>
+    </div>
+  </details>
+
+  <div class="panel adv">
+    <div class="row" style="justify-content:space-between">
+      <h2>Lignes lues sur la capture</h2>
+      <div class="row">
+        <button id="locate" type="button" class="small" hidden>Localiser les adresses modifiées</button>
+        <button id="addrow" type="button" class="ghost small">Ajouter une ligne</button>
+      </div>
+    </div>
+    <p class="meta">Chaque cellule se corrige à la main, les tournées se recalculent aussitôt. Liseré orange : lecture à vérifier. Liseré rouge : adresse à localiser.</p>
+    <div class="tablebox">
+      <table>
+        <thead><tr><th>Client</th><th>Lieu</th><th>Ville</th><th>CP</th><th>Métrage</th><th>Sens</th><th>Début</th><th>Fin</th><th>Tournée actuelle</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel adv">
+    <h2>Hypothèses à valider avec Joel</h2>
+    <ul class="hyp">
+      <li>La colonne chiffrée de chaque ligne est lue comme le métrage de la commande. Sur la capture du 30/10/26, la somme des lignes de la tournée DAF1 donne 5,0, soit le « Métrage max » affiché dans son bandeau.</li>
+      <li>La colonne « Vers » est interprétée ainsi : « Client » pour une livraison, « Bruxelles » pour une reprise vers le dépôt. Le sens se corrige ligne par ligne.</li>
+      <li>Le dépôt est placé au centre de Bruxelles faute d'adresse confirmée. Sa position se règle dans les règles de regroupement.</li>
+      <li>Les capacités 5, 6 et 8 mètres viennent de l'entretien du 9 novembre. Une commande qui dépasse le plus grand véhicule est signalée « Plusieurs camions », comme dans le logiciel actuel.</li>
+      <li>Les adresses sont placées au centre de leur commune. La version suivante utilisera l'adresse exacte et les temps de route réels.</li>
+    </ul>
+  </div>
+</div>
+
+<script>/*__INJECT__*/</script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const COLORS = ["#0b7a75","#d1495b","#3d5a80","#c77d0a","#7b4bb7","#2e933c","#c2527a","#5c6b73","#8a5a2b","#1f6fb5"];
+const BE = [[2.55,51.09],[3.37,51.37],[3.38,51.27],[3.82,51.21],[4.24,51.37],[4.43,51.47],[4.55,51.42],[4.77,51.50],[5.03,51.47],[5.24,51.31],[5.47,51.29],[5.57,51.22],[5.85,51.15],[5.77,51.06],[5.69,50.91],[5.69,50.76],[6.02,50.75],[6.27,50.62],[6.37,50.32],[6.13,50.13],[5.97,50.17],[5.74,49.86],[5.90,49.64],[5.82,49.55],[5.47,49.50],[5.39,49.62],[4.97,49.80],[4.85,49.79],[4.87,50.15],[4.68,49.99],[4.43,49.94],[4.14,49.98],[4.22,50.26],[3.71,50.31],[3.66,50.45],[3.28,50.53],[3.24,50.71],[3.02,50.77],[2.90,50.69],[2.63,50.82]];
+const CITIES = [["Bruxelles",4.352,50.846],["Anvers",4.40,51.22],["Gand",3.72,51.05],["Bruges",3.22,51.21],["Liège",5.57,50.63],["Namur",4.87,50.47],["Charleroi",4.44,50.41],["Mons",3.95,50.45],["Louvain",4.70,50.88],["Hasselt",5.34,50.93],["Tournai",3.39,50.61],["Courtrai",3.26,50.83],["Malines",4.48,51.03],["Alost",4.04,50.94],["Wavre",4.61,50.72],["Turnhout",4.94,51.32]];
+
+// Exemple : lignes relevées sur la vidéo du planning du 30/10/26 (lecture approximative).
+const EX = [
+ ["Traiteur A","Traiteur A","GERAARDSBERGEN","9500",0.01,"R","08:00","11:00","0-Renault 12T",50.773,3.882],
+ ["Traiteur A","Traiteur A","GERAARDSBERGEN","9500",2.95,"R","09:00","11:00","0-Renault 12T",50.773,3.882],
+ ["Client B","Lieu privé","MALINES","2800",1.55,"R","08:00","13:00","1_DAF1",51.028,4.478],
+ ["Restauration C","Site d'Olen","OLEN","2250",0,"R","08:00","11:00","1_DAF1",51.144,4.860],
+ ["Restauration C","Site d'Olen","OLEN","2250",0,"R","09:00","17:00","1_DAF1",51.144,4.860],
+ ["Restauration C","Site de Beerse","BEERSE","2340",0.90,"R","08:00","11:00","1_DAF1",51.319,4.853],
+ ["Restauration C","Site de Beerse","BEERSE","2340",0.90,"R","08:00","11:00","1_DAF1",51.319,4.853],
+ ["Client D","Client D","RANST","2520",1.22,"R","09:00","11:00","1_DAF1",51.190,4.565],
+ ["Restauration C","Site d'Anvers","ANVERS","2018",0.45,"R","09:00","14:00","1_DAF1",51.203,4.411],
+ ["Client E","Salle événementielle","ANDERLECHT","1070",0.27,"L","09:00","17:00","7-DAF7",50.836,4.330],
+ ["Client E","Salle événementielle","ANDERLECHT","1070",1.39,"R","16:00","18:00","7-DAF7",50.836,4.330],
+ ["Client E","Salle événementielle","ANDERLECHT","1070",0,"R","16:00","18:00","7-DAF7",50.836,4.330],
+ ["Client E","Salle événementielle","ANDERLECHT","1070",11.6,"R","16:00","18:00","7-DAF7",50.836,4.330,true],
+ ["Client E","Salle événementielle","ANDERLECHT","1070",0,"R","16:00","18:00","7-DAF7",50.836,4.330],
+ ["Client F","Salle événementielle","ANDERLECHT","1070",0.33,"R","17:00","21:00","7-DAF7",50.836,4.330],
+ ["Client F","Salle événementielle","ANDERLECHT","1070",5.17,"R","17:00","21:00","7-DAF7",50.836,4.330],
+ ["Client F","Salle événementielle","ANDERLECHT","1070",0.45,"R","17:00","21:00","7-DAF7",50.836,4.330],
+ ["Hôtel G","Hôtel G","GENVAL","1332",0.53,"R","08:00","10:00","2-DAF2",50.722,4.494],
+ ["Client H","Client H","HOEGAARDEN","3320",4.75,"L","08:00","11:00","2-DAF2",50.776,4.889],
+ ["Client I","Client I","TIENEN","3300",0.28,"L","08:00","18:00","2-DAF2",50.807,4.938]
+];
+
+let rows = [], tours = [], stopsById = {}, unlocated = 0, uid = 1, sampleFn = null, exampleLoaded = false;
+const P = {};
+
+function readParams(){
+  P.mode = $("p-mode").value;
+  P.caps = $("p-veh").value.split(/[;, ]+/).map(s=>parseFloat(s.replace(",", "."))).filter(v=>v>0).sort((a,b)=>a-b);
+  if(!P.caps.length) P.caps=[8];
+  P.maxH = +$("p-maxh").value||8; P.maxStops = +$("p-maxstops").value||12;
+  P.stop = +$("p-stop").value||0; P.speed = +$("p-speed").value||50; P.strict = $("p-strict").checked;
+  const d = $("p-depot").value.split(/[;, ]+/).map(Number);
+  P.depot = (d.length>=2 && isFinite(d[0]) && isFinite(d[1]) && d[0]) ? {lat:d[0],lon:d[1]} : {lat:50.846,lon:4.352};
+}
+const toMin = s => { const m=/^(\d{1,2})\s*[:hH.]\s*(\d{2})$/.exec(String(s||"").trim()); return m ? (+m[1])*60+(+m[2]) : null; };
+const hhmm = t => { t=Math.round(t); t=((t%1440)+1440)%1440; return String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0"); };
+const dur = m => { m=Math.round(m); return Math.floor(m/60)+" h "+String(m%60).padStart(2,"0"); };
+const fr = (v,d=1) => Number(v).toFixed(d).replace(".",",");
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function km(a,b){
+  const R=6371,r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lon-a.lon)*r;
+  const h=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h))*1.3;
+}
+function mkRow(a){ return {id:uid++,client:a[0]||"",lieu:a[1]||"",ville:a[2]||"",cp:String(a[3]||""),m:+a[4]||0,type:a[5]==="L"?"L":"R",deb:a[6]||"",fin:a[7]||"",cur:a[8]||"",lat:a[9]??null,lon:a[10]??null,unsure:!!a[11]}; }
+
+function buildStops(list, keepOrder){
+  const map=new Map();
+  for(const r of list){
+    if(r.lat==null||r.lon==null) continue;
+    const d=toMin(r.deb), slot=(d!=null&&d>=15*60)?"soir":"jour";
+    const key=[r.cp,(r.lieu||r.client).toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,12),slot,keepOrder?r.cur:""].join("|");
+    if(!map.has(key)) map.set(key,{id:key,rows:[],slot});
+    map.get(key).rows.push(r);
+  }
+  return [...map.values()].map(s=>{
+    const n=s.rows.length;
+    s.lat=s.rows.reduce((t,r)=>t+r.lat,0)/n; s.lon=s.rows.reduce((t,r)=>t+r.lon,0)/n;
+    s.L=s.rows.filter(r=>r.type==="L").reduce((t,r)=>t+r.m,0);
+    s.R=s.rows.filter(r=>r.type==="R").reduce((t,r)=>t+r.m,0);
+    const ds=s.rows.map(r=>toMin(r.deb)).filter(v=>v!=null), fs=s.rows.map(r=>toMin(r.fin)).filter(v=>v!=null);
+    s.a=ds.length?Math.max(...ds):null; s.b=fs.length?Math.min(...fs):null;
+    if(s.a!=null&&s.b!=null&&s.a>s.b){ s.a=Math.min(...ds); s.b=Math.max(...fs); }
+    s.name=s.rows[0].lieu||s.rows[0].client; s.ville=s.rows[0].ville; s.cp=s.rows[0].cp;
+    s.clients=[...new Set(s.rows.map(r=>r.client))].join(", ");
+    return s;
+  });
+}
+function evaluate(seq){
+  const D=P.depot; let load=seq.reduce((t,s)=>t+s.L,0), start=load, peak=load, dist=0, late=0, prev=D;
+  const tr0=km(D,seq[0])/P.speed*60, t0=(seq[0].a!=null?seq[0].a:7*60+30)-tr0; let t=t0; const etas=[];
+  for(const s of seq){
+    const k=km(prev,s); dist+=k; t+=k/P.speed*60;
+    if(s.a!=null&&t<s.a) t=s.a;
+    const isLate=s.b!=null&&t>s.b+1; if(isLate) late++;
+    etas.push({t,late:isLate});
+    t+=P.stop+5*(s.rows.length-1);
+    load=load-s.L+s.R; if(load>peak) peak=load; prev=s;
+  }
+  const kb=km(prev,D); dist+=kb; t+=kb/P.speed*60;
+  return {km:dist,min:t-t0,t0,end:t,etas,late,peak,start};
+}
+const memo=new Map();
+function score(seq){ const e=evaluate(seq); return e.late*1e6+e.min; }
+function improve(seq){
+  let s=score(seq), ok=true, g=0;
+  while(ok&&g++<30){ ok=false;
+    for(let i=0;i<seq.length;i++) for(let j=0;j<seq.length;j++){ if(i===j) continue;
+      const c=seq.slice(), x=c.splice(i,1)[0]; c.splice(j,0,x); const cs=score(c);
+      if(cs<s-0.5){ seq=c; s=cs; ok=true; } } }
+  return seq;
+}
+function orderTour(list){
+  if(list.length<2) return list.slice();
+  const key=list.map(s=>s.id).sort().join("#"); if(memo.has(key)) return memo.get(key);
+  let left=list.slice(), seq=[], cur=P.depot;
+  while(left.length){ let bi=0,bd=1e9; left.forEach((s,i)=>{const d=km(cur,s); if(d<bd){bd=d;bi=i;}}); cur=left[bi]; seq.push(cur); left.splice(bi,1); }
+  const len=q=>{let d=km(P.depot,q[0]); for(let i=1;i<q.length;i++) d+=km(q[i-1],q[i]); return d+km(q[q.length-1],P.depot);};
+  let improved=true, guard=0;
+  while(improved&&guard++<50){ improved=false;
+    for(let i=0;i<seq.length-1;i++) for(let j=i+1;j<seq.length;j++){
+      const c=seq.slice(0,i).concat(seq.slice(i,j+1).reverse(),seq.slice(j+1));
+      if(len(c)<len(seq)-0.01){ seq=c; improved=true; }
+    }
+  }
+  // Trois ordres candidats : le plus court, son inverse, et par échéance de créneau. On garde celui qui respecte le mieux les créneaux.
+  const cands=[seq, seq.slice().reverse(), list.slice().sort((a,b)=>(a.b==null?1e9:a.b)-(b.b==null?1e9:b.b))];
+  let best=cands[0], bs=score(best);
+  for(const c of cands.slice(1)){ const v=score(c); if(v<bs-1){ bs=v; best=c; } }
+  if(bs>=1e6){ for(const c of cands){ const k=improve(c), v=score(k); if(v<bs-0.5){ bs=v; best=k; } } }
+  memo.set(key,best); return best;
+}
+function feasible(list){
+  if(list.length===1) return true;
+  if(list.length>P.maxStops) return false;
+  const e=evaluate(orderTour(list)), cap=P.caps[P.caps.length-1];
+  return e.peak<=cap+1e-6 && e.min<=P.maxH*60 && (!P.strict||e.late===0);
+}
+function plan(){
+  memo.clear();
+  const all=buildStops(rows,false); stopsById={}; all.forEach(s=>stopsById[s.id]=s);
+  unlocated=rows.filter(r=>r.lat==null||r.lon==null).length;
+  const cost=c=>evaluate(orderTour(c)).km, out=[];
+  for(const slot of ["jour","soir"]){
+    // Méthode des économies : on fusionne en priorité les deux groupes dont la réunion épargne le plus de kilomètres, tant que la tournée reste faisable.
+    let cl=all.filter(s=>s.slot===slot).map(s=>[s]);
+    for(;;){
+      let bi=-1,bj=-1,bs=0.5;
+      for(let i=0;i<cl.length;i++) for(let j=i+1;j<cl.length;j++){
+        if(P.mode==="cp"&&cl[i][0].cp.slice(0,2)!==cl[j][0].cp.slice(0,2)) continue;
+        const m=cl[i].concat(cl[j]); if(!feasible(m)) continue;
+        const sv=cost(cl[i])+cost(cl[j])-cost(m); if(sv>bs){ bs=sv; bi=i; bj=j; }
+      }
+      if(bi<0) break;
+      cl[bi]=cl[bi].concat(cl[bj]); cl.splice(bj,1);
+    }
+    cl.map(c=>({c,t:evaluate(orderTour(c)).t0})).sort((a,b)=>a.t-b.t).forEach(x=>out.push({slot,ids:x.c.map(s=>s.id)}));
+  }
+  tours=out;
+}
+function tourView(t){
+  const seq=orderTour(t.ids.map(id=>stopsById[id]).filter(Boolean)); if(!seq.length) return null;
+  const e=evaluate(seq), cap=P.caps.find(c=>c>=e.peak-1e-6), big=P.caps[P.caps.length-1];
+  return {seq,e,cap:cap||big,trucks:cap?1:Math.ceil(e.peak/big)};
+}
+function currentPlan(){
+  if(!rows.length||rows.some(r=>!r.cur)) return null;
+  const g=new Map(); rows.forEach(r=>{ if(!g.has(r.cur)) g.set(r.cur,[]); g.get(r.cur).push(r); });
+  let k=0,m=0,n=0; for(const [,list] of g){ const st=buildStops(list,true); if(!st.length) continue; for(const sl of ["jour","soir"]){ const part=st.filter(x=>x.slot===sl); if(part.length){ const e=evaluate(part); k+=e.km; m+=e.min; } } n++; }
+  return n?{n,km:k,min:m}:null;
+}
+
+function render(){
+  readParams();
+  const views=tours.map(tourView).filter(Boolean);
+  const totKm=views.reduce((t,v)=>t+v.e.km,0), totMin=views.reduce((t,v)=>t+v.e.min,0), nStops=views.reduce((t,v)=>t+v.seq.length,0);
+  $("tiles").innerHTML=[[views.length,"véhicules"],[nStops,"arrêts"],[Math.round(totKm)+" km","distance estimée"],[dur(totMin),"route et temps sur place"]]
+    .map(x=>`<div class="tile num"><b>${x[0]}</b><span>${x[1]}</span></div>`).join("");
+  const cp=currentPlan(), c=$("cmp");
+  if(cp&&views.length){ const dk=Math.round(totKm-cp.km);
+    c.hidden=false; c.innerHTML=`<strong>Planning de la capture</strong> : ${cp.n} tournées, ${Math.round(cp.km)} km estimés dans l'ordre de l'écran. <strong>Proposition</strong> : ${views.length} tournées, ${Math.round(totKm)} km (${dk>0?"+":""}${dk} km). Même méthode d'estimation des deux côtés.`;
+  } else c.hidden=true;
+  $("tours").innerHTML = views.length ? views.map((v,i)=>{
+    const col=COLORS[i%COLORS.length], chips=[];
+    chips.push(`<span class="chip">${tours[i].slot==="soir"?"Soirée":"Journée"}</span>`);
+    chips.push(`<span class="chip">${fr(v.cap,0)} m</span>`);
+    if(v.trucks>1) chips.push(`<span class="chip crit">Plusieurs camions : ${v.trucks}</span>`);
+    if(v.e.late) chips.push(`<span class="chip warn">${v.e.late} arrêt${v.e.late>1?"s":""} hors créneau</span>`);
+    if(v.e.min>P.maxH*60) chips.push(`<span class="chip warn">Dépasse ${fr(P.maxH,1)} h</span>`);
+    const li=v.seq.map((s,j)=>{
+      const win=(s.a!=null||s.b!=null)?`créneau ${s.a!=null?hhmm(s.a):"…"}-${s.b!=null?hhmm(s.b):"…"}`:"sans créneau";
+      const parts=[]; if(s.L) parts.push("livraison "+fr(s.L,2)+" m"); if(s.R) parts.push("reprise "+fr(s.R,2)+" m"); if(!parts.length) parts.push(s.rows.some(r=>r.type==="L")?"livraison":"reprise");
+      const opts=`<option value="">Déplacer…</option>`+views.map((_,k)=>k===i?"":`<option value="${k}">vers véhicule ${k+1}</option>`).join("")+`<option value="new">nouveau véhicule</option>`;
+      return `<li><span class="n">${j+1}</span><div><div class="w">${esc(s.name)} · ${esc(s.ville)} ${esc(s.cp)}</div><div class="d num">${esc(s.clients)} · ${s.rows.length} commande${s.rows.length>1?"s":""} · ${parts.join(", ")}</div><div class="d num">arrivée ${hhmm(v.e.etas[j].t)} · ${win}${v.e.etas[j].late?' <span class="chip warn">en retard</span>':""}</div></div><select class="adv" aria-label="Déplacer l'arrêt ${esc(s.name)}" data-move="${esc(s.id)}" data-from="${i}">${opts}</select></li>`;
+    }).join("");
+    return `<article class="tour" style="--c:${col}" data-tour="${i}"><header><div class="t"><b>Véhicule ${i+1}</b>${chips.join("")}</div><div class="meta num">Métrage départ / max / véhicule : ${fr(v.e.start)} / ${fr(v.e.peak)} / ${fr(v.cap,0)} · ${v.seq.length} arrêt${v.seq.length>1?"s":""} · ${Math.round(v.e.km)} km · ${dur(v.e.min)} · départ ${hhmm(v.e.t0)}, retour ${hhmm(v.e.end)}</div></header><ol class="stops">${li}</ol><footer><button type="button" class="ghost small" data-copy="${i}">Copier la feuille de route</button></footer></article>`;
+  }).join("") : `<div class="panel meta">Aucune ligne localisée pour l'instant. Déposez une capture ou rechargez l'exemple.</div>`;
+  drawMap(views);
+  $("locate").hidden = !(unlocated&&sampleFn);
+  if(unlocated) $("locate").textContent=`Localiser ${unlocated} adresse${unlocated>1?"s":""}`;
+  $("source").textContent = exampleLoaded ? "Exemple affiché : une journée type, noms de clients remplacés." : "";
+  window.__views=views;
+}
+function drawMap(views){
+  const pts=[P.depot]; views.forEach(v=>v.seq.forEach(s=>pts.push(s)));
+  let x0=Math.min(...pts.map(p=>p.lon)),x1=Math.max(...pts.map(p=>p.lon)),y0=Math.min(...pts.map(p=>p.lat)),y1=Math.max(...pts.map(p=>p.lat));
+  const W=760,H=540,cos=Math.cos(50.8*Math.PI/180);
+  let dx=Math.max((x1-x0)*1.3,0.5), dy=Math.max((y1-y0)*1.3,0.32); const cx=(x0+x1)/2, cy=(y0+y1)/2;
+  const sc=Math.min(W/(dx*cos),H/dy), X=lon=>W/2+(lon-cx)*cos*sc, Y=lat=>H/2-(lat-cy)*sc;
+  let h=`<polygon points="${BE.map(p=>X(p[0]).toFixed(1)+","+Y(p[1]).toFixed(1)).join(" ")}" fill="var(--panel)" stroke="var(--line)" stroke-width="2"/>`;
+  CITIES.forEach(c=>{ const x=X(c[1]),y=Y(c[2]); if(x<8||x>W-8||y<8||y>H-8) return; h+=`<circle cx="${x}" cy="${y}" r="2" fill="var(--muted)" opacity=".6"/><text x="${x+5}" y="${y-5}" font-size="11" fill="var(--muted)" opacity=".8">${c[0]}</text>`; });
+  views.forEach((v,i)=>{ const col=COLORS[i%COLORS.length];
+    const path=[P.depot].concat(v.seq,[P.depot]).map(p=>X(p.lon).toFixed(1)+","+Y(p.lat).toFixed(1)).join(" ");
+    h+=`<g data-tour="${i}"><polyline points="${path}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" opacity=".85"${tours[i].slot==="soir"?' stroke-dasharray="6 5"':""}/>`;
+    v.seq.forEach((s,j)=>{ const x=X(s.lon),y=Y(s.lat)+(tours[i].slot==="soir"?14:0);
+      h+=`<circle cx="${x}" cy="${y}" r="10" fill="${col}" stroke="var(--panel)" stroke-width="2"><title>Tournée ${i+1}, arrêt ${j+1} : ${esc(s.name)}, ${esc(s.ville)}</title></circle><text x="${x}" y="${y+4}" text-anchor="middle" font-size="11" font-weight="600" fill="#fff">${j+1}</text><text x="${x+13}" y="${y+4}" font-size="11" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="var(--panel)" stroke-width="3">${esc(s.ville)}</text>`; });
+    h+=`</g>`; });
+  const dxp=X(P.depot.lon), dyp=Y(P.depot.lat);
+  h+=`<rect x="${dxp-8}" y="${dyp-8}" width="16" height="16" rx="3" fill="var(--ink)" stroke="var(--panel)" stroke-width="2"/><text x="${dxp}" y="${dyp-13}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink)" paint-order="stroke" stroke="var(--panel)" stroke-width="3">Dépôt</text>`;
+  $("map").innerHTML=h;
+}
+function renderRows(){
+  $("rows").innerHTML=rows.map(r=>`<tr data-id="${r.id}" class="${r.lat==null?"noloc":r.unsure?"unsure":""}">
+    <td><input id="r${r.id}-client" data-f="client" value="${esc(r.client)}" aria-label="Client"></td>
+    <td><input id="r${r.id}-lieu" data-f="lieu" value="${esc(r.lieu)}" aria-label="Lieu"></td>
+    <td><input id="r${r.id}-ville" data-f="ville" value="${esc(r.ville)}" aria-label="Ville"></td>
+    <td style="width:70px"><input id="r${r.id}-cp" data-f="cp" value="${esc(r.cp)}" aria-label="Code postal" inputmode="numeric"></td>
+    <td style="width:80px"><input id="r${r.id}-m" data-f="m" value="${fr(r.m,2)}" aria-label="Métrage" inputmode="decimal"></td>
+    <td style="width:110px"><select id="r${r.id}-type" data-f="type" aria-label="Sens"><option value="L"${r.type==="L"?" selected":""}>Livraison</option><option value="R"${r.type==="R"?" selected":""}>Reprise</option></select></td>
+    <td style="width:72px"><input id="r${r.id}-deb" data-f="deb" value="${esc(r.deb)}" aria-label="Début du créneau" placeholder="08:00"></td>
+    <td style="width:72px"><input id="r${r.id}-fin" data-f="fin" value="${esc(r.fin)}" aria-label="Fin du créneau" placeholder="11:00"></td>
+    <td><input id="r${r.id}-cur" data-f="cur" value="${esc(r.cur)}" aria-label="Tournée actuelle"></td>
+    <td><button type="button" class="ghost small" data-del="${r.id}" aria-label="Supprimer la ligne">×</button></td></tr>`).join("");
+}
+function refresh(full){ readParams(); plan(); if(full) renderRows(); render(); }
+function setStatus(msg,err){ const s=$("status"); s.textContent=msg||""; s.className=err?"err":""; }
+function loadExample(){ rows=EX.map(mkRow); exampleLoaded=true; refresh(true); }
+
+function roadSheet(i){
+  const v=window.__views[i]; if(!v) return "";
+  const L=[`VÉHICULE ${i+1} · ${fr(v.cap,0)} m${v.trucks>1?" · PLUSIEURS CAMIONS ("+v.trucks+")":""}`,`Départ dépôt ${hhmm(v.e.t0)} · retour ${hhmm(v.e.end)} · ${Math.round(v.e.km)} km · métrage départ/max ${fr(v.e.start)}/${fr(v.e.peak)}`];
+  v.seq.forEach((s,j)=>{ L.push(`${j+1}. ${hhmm(v.e.etas[j].t)}  ${s.name}, ${s.cp} ${s.ville}  [${s.a!=null?hhmm(s.a):"…"}-${s.b!=null?hhmm(s.b):"…"}]`);
+    s.rows.forEach(r=>L.push(`     ${r.type==="L"?"Livraison":"Reprise"} ${fr(r.m,2)} m · ${r.client}`)); });
+  return L.join("\n");
+}
+function copyText(txt){
+  const out=$("copyout"); out.hidden=false; out.value=txt;
+  try{ navigator.clipboard.writeText(txt).then(()=>setStatus("Feuille de route copiée."),()=>{out.select(); setStatus("Copie refusée par le navigateur : le texte est sélectionné sous les tournées.");}); }
+  catch(e){ out.select(); setStatus("Le texte est prêt à copier sous les tournées."); }
+}
+
+// Lecture de la capture par Claude
+const PROMPT = `Tu lis une capture d'écran (ou une photo d'écran) du planning d'un logiciel de livraisons d'un loueur de matériel événementiel en Belgique.
+Le tableau alterne des bandeaux de tournée (dates, « N° parc : X », « Equipage ») et des lignes de commande. Colonnes d'une ligne, de gauche à droite : Client | Nom du lieu | Ville | code postal à 4 chiffres | numéro d'ordre | métrage (décimal à virgule) | icône | Vers (« Bruxelles » ou « Client ») | Horaires (date puis hh:mm - hh:mm) | numéros de document.
+Réponds UNIQUEMENT par un objet JSON, sans texte autour :
+{"lignes":[{"client":"","lieu":"","ville":"","cp":"","metrage":0,"vers":"","debut":"HH:MM","fin":"HH:MM","tournee":"","lat":0,"lon":0,"incertain":false}]}
+Règles : une entrée par ligne de commande visible, dans l'ordre de l'écran. "tournee" = le N° parc du bandeau placé au-dessus de la ligne, chaîne vide si le bandeau n'en a pas. "lat" et "lon" = centre approximatif de la commune belge correspondant au code postal, en degrés décimaux. N'invente aucune ligne. Si une cellule est illisible, laisse-la vide et mets "incertain" à true. Si l'image ne contient aucun planning, renvoie {"lignes":[]}.`;
+function parseJson(txt){ if(typeof txt!=="string") return txt; const a=txt.indexOf("{"), b=txt.lastIndexOf("}"); const a2=txt.indexOf("["); if(a2>=0&&(a<0||a2<a)) return JSON.parse(txt.slice(a2,txt.lastIndexOf("]")+1)); return JSON.parse(txt.slice(a,b+1)); }
+function shrink(file){ return new Promise(res=>{ const img=new Image(), url=URL.createObjectURL(file);
+  img.onload=()=>{ const m=Math.max(img.width,img.height), k=m>2400?2400/m:1; if(k===1&&file.size<4e6){URL.revokeObjectURL(url);res(file);return;}
+    const c=document.createElement("canvas"); c.width=Math.round(img.width*k); c.height=Math.round(img.height*k); c.getContext("2d").drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(url); c.toBlob(b=>res(b||file),"image/jpeg",0.92); };
+  img.onerror=()=>{URL.revokeObjectURL(url);res(file);}; img.src=url; }); }
+function fromLigne(l){ const ok=isFinite(+l.lat)&&isFinite(+l.lon)&&+l.lat>49&&+l.lat<52&&+l.lon>2&&+l.lon<7;
+  return mkRow([l.client,l.lieu,l.ville,l.cp,parseFloat(String(l.metrage).replace(",", "."))||0,/client/i.test(l.vers||"")?"L":"R",l.debut,l.fin,l.tournee,ok?+l.lat:null,ok?+l.lon:null,!!l.incertain]); }
+let busy=false;
+async function readCaptures(files){
+  files=[...files].filter(f=>f.type.startsWith("image/")); if(!files.length||busy) return;
+  if(!sampleFn){ setStatus("La lecture automatique n'est pas disponible dans cette vue. Ouvrez la page publiée, ou ajoutez les lignes à la main.",true); return; }
+  busy=true; let added=0; const fresh=[];
+  try{
+    for(let i=0;i<files.length;i++){
+      setStatus(`Lecture de la capture ${i+1} sur ${files.length}… (30 secondes environ)`);
+      const blob=await shrink(files[i]);
+      const r=await sampleFn(PROMPT,{images:[blob],modelTier:"complex",cache:false});
+      const data=parseJson(r.text); const list=Array.isArray(data)?data:(data.lignes||[]);
+      for(const l of list){ fresh.push(fromLigne(l)); added++; }
+    }
+    if(added){ rows=exampleLoaded?fresh:rows.concat(fresh); exampleLoaded=false; refresh(true); setStatus(`${added} lignes lues. Vérifiez le tableau en bas de page, puis ajustez les tournées.`); }
+    else setStatus("Aucune ligne de planning reconnue sur cette image. Essayez une capture plus nette ou plus serrée sur le tableau.",true);
+  }catch(e){
+    const code=e&&e.code; setStatus(code==="not_granted"?"La lecture par Claude a été refusée. Autorisez-la pour lire une capture.":code==="rate_limited"?"Trop de lectures d'affilée. Réessayez dans une minute.":"La lecture a échoué ("+((e&&e.message)||"réponse illisible")+"). Réessayez avec une capture plus nette.",true);
+  }
+  busy=false;
+}
+async function locate(){
+  const miss=rows.filter(r=>r.lat==null&&(r.cp||r.ville)); if(!miss.length||!sampleFn||busy) return; busy=true; setStatus("Localisation des adresses…");
+  try{
+    const r=await sampleFn(`Pour chaque commune belge ci-dessous, donne le centre approximatif en degrés décimaux. Réponds UNIQUEMENT par un tableau JSON [{"i":0,"lat":0,"lon":0}].\n`+miss.map((m,i)=>`${i}: ${m.cp} ${m.ville}`).join("\n"),{modelTier:"quick"});
+    for(const o of parseJson(r.text)){ const m=miss[o.i]; if(m&&+o.lat>49&&+o.lat<52&&+o.lon>2&&+o.lon<7){ m.lat=+o.lat; m.lon=+o.lon; } }
+    refresh(true); setStatus("Adresses localisées.");
+  }catch(e){ setStatus("La localisation a échoué. Réessayez.",true); }
+  busy=false;
+}
+
+// Événements
+$("pick").onclick=()=>$("file").click();
+$("file").onchange=e=>{ readCaptures(e.target.files); e.target.value=""; };
+$("example").onclick=()=>{ loadExample(); setStatus("Exemple rechargé."); };
+$("clear").onclick=()=>{ rows=[]; exampleLoaded=false; refresh(true); setStatus("Liste vidée."); };
+$("locate").onclick=locate;
+$("addrow").onclick=()=>{ rows.push(mkRow(["","","","",0,"L","08:00","12:00","",null,null])); exampleLoaded=false; refresh(true); };
+const drop=$("drop");
+["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("over");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("over");}));
+drop.addEventListener("drop",e=>readCaptures(e.dataTransfer.files));
+document.addEventListener("paste",e=>{ const f=[...(e.clipboardData?.files||[])]; if(f.some(x=>x.type.startsWith("image/"))){ e.preventDefault(); readCaptures(f); } });
+document.querySelectorAll(".params input,.params select").forEach(el=>el.addEventListener("change",()=>refresh(false)));
+$("rows").addEventListener("change",e=>{
+  const tr=e.target.closest("tr"), f=e.target.dataset.f; if(!tr||!f) return; const r=rows.find(x=>x.id==tr.dataset.id); if(!r) return;
+  if(f==="m") r.m=parseFloat(e.target.value.replace(",", "."))||0; else r[f]=e.target.value.trim();
+  if(f==="cp"||f==="ville"){ const twin=rows.find(x=>x!==r&&x.lat!=null&&x.cp===r.cp&&r.cp); if(twin){r.lat=twin.lat;r.lon=twin.lon;} else {r.lat=null;r.lon=null;} tr.className=r.lat==null?"noloc":""; }
+  r.unsure=false; if(tr.className==="unsure") tr.className=""; exampleLoaded=false; refresh(false);
+});
+$("rows").addEventListener("click",e=>{ const d=e.target.dataset.del; if(!d) return; rows=rows.filter(r=>r.id!=d); exampleLoaded=false; refresh(true); });
+$("tours").addEventListener("change",e=>{
+  const id=e.target.dataset.move; if(!id||!e.target.value) return; const from=+e.target.dataset.from, to=e.target.value;
+  tours[from].ids=tours[from].ids.filter(x=>x!==id);
+  if(to==="new") tours.push({slot:stopsById[id].slot,ids:[id]}); else tours[+to].ids.push(id);
+  tours=tours.filter(t=>t.ids.length); render();
+});
+$("tours").addEventListener("click",e=>{ const c=e.target.dataset.copy; if(c!=null) copyText(roadSheet(+c)); });
+$("copyall").onclick=()=>copyText((window.__views||[]).map((_,i)=>roadSheet(i)).join("\n\n"));
+function hl(i){ document.querySelectorAll("#map g[data-tour]").forEach(g=>g.style.opacity=(i==null||g.dataset.tour==i)?1:.15); }
+$("tours").addEventListener("mouseover",e=>{ const a=e.target.closest(".tour"); if(a) hl(a.dataset.tour); });
+$("tours").addEventListener("mouseleave",()=>hl(null));
+
+if(window.__STREAMLIT__){ document.body.classList.add("simple"); $("drop").style.display="none"; const m=$("more"); m.hidden=false; m.onclick=()=>{ document.body.classList.remove("simple"); m.hidden=true; }; }
+if(Array.isArray(window.__ROWS__)&&window.__ROWS__.length){ rows=window.__ROWS__.map(fromLigne); exampleLoaded=false; refresh(true); } else loadExample();
+(async()=>{ try{ if(window.claude&&window.claude.use){ const s=await window.claude.use("sample"); if(s){ let ok=true; try{ const lim=await s.limits(); ok=!!lim.images; }catch(e){} if(ok){ sampleFn=s; render(); } } } }catch(e){} })();
+</script>
+</body>
+</html>
